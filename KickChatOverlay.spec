@@ -1,0 +1,79 @@
+# -*- mode: python ; coding: utf-8 -*-
+# Onefile derlemesinde PyQt6 hook'u tum Qt6/bin ve Qt6/plugins klasorunu
+# oldugu gibi paketliyor (Quick/Qml/Multimedia/Pdf/OpenGL yazilim render
+# vb. hic kullanmadigimiz ~40MB'lik parcalar dahil). Bu dosya, Analysis
+# adimindan sonra binaries/datas listesini filtreleyip sadece
+# QtCore/QtGui/QtWidgets/QtSvg + platform eklentisi icin gerekli
+# DLL'leri birakiyor.
+
+EXCLUDE_SUBSTR = [
+    "opengl32sw", "avcodec", "avformat", "avutil", "swresample", "swscale",
+    "qt6quick", "qt6qml", "qt6designer", "qt6pdf", "qt6multimedia",
+    "qt6remoteobjects", "qt6positioning", "qt6sensors", "qt6serialport",
+    "qt6bluetooth", "qt6nfc", "qt6sql", "qt6test", "qt6websockets",
+    "qt6webchannel", "qt6help", "qt6xml", "qt63d", "qt6opengl",
+    "qt6shadertools", "qt6quickcontrols2", "d3dcompiler", "qt6network",
+    "qt6httpserver", "qt6webview", "qt6spatialaudio", "qt6texttospeech",
+    "qt6location", "qt6printsupport", "qt6statemachine", "qt6labs",
+    "qt6quicktemplates", "qt6quickdialogs", "qt6webenginecore",
+    "qt6webenginewidgets", "qt6pdfium", "qt6httpserver",
+    "/qml/", "\\qml\\", "/multimedia/", "\\multimedia\\",
+    "/position/", "\\position\\", "/sensors/", "\\sensors\\",
+    "/sqldrivers/", "\\sqldrivers\\", "/tls/", "\\tls\\",
+    "/webview/", "\\webview\\", "/sensorgestures/", "\\sensorgestures\\",
+    "/renderplugins/", "\\renderplugins\\", "/webenginewidgets/",
+    # emote gorselinin gercek formati (webp/jpeg/gif olabilir) bilinmedigi
+    # icin o kod yollarina dokunulmuyor; sadece kesin kullanilmayan
+    # formatlar (mac ikonu, windows ikonu, tiff, tga, wbmp, dds, pdf) cikarildi
+    "qicns", "qico.dll", "qtiff", "qtga", "qwbmp", "qpdf.dll", "qdds",
+    # dokunmatik / offscreen / minimal platform eklentileri kullanilmiyor
+    "qtuiotouchplugin", "qoffscreen", "qminimal",
+    # QIcon'lari kod icinde QPixmap ile olusturuyoruz, svg icon-engine plugini gereksiz
+    "qsvgicon",
+]
+
+
+def _keep(entry):
+    name = str(entry[0]).lower() + " " + str(entry[1]).lower()
+    return not any(s in name for s in EXCLUDE_SUBSTR)
+
+
+a = Analysis(
+    ["main.py"],
+    pathex=[],
+    binaries=[],
+    datas=[],
+    hiddenimports=[],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
+
+a.binaries = [b for b in a.binaries if _keep(b)]
+a.datas = [d for d in a.datas if _keep(d)]
+
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name="KickChatOverlay",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
