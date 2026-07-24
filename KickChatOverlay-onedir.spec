@@ -1,10 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Onefile derlemesinde PyQt6 hook'u tum Qt6/bin ve Qt6/plugins klasorunu
-# oldugu gibi paketliyor (Quick/Qml/Multimedia/Pdf/OpenGL yazilim render
-# vb. hic kullanmadigimiz ~40MB'lik parcalar dahil). Bu dosya, Analysis
-# adimindan sonra binaries/datas listesini filtreleyip sadece
-# QtCore/QtGui/QtWidgets/QtSvg + platform eklentisi icin gerekli
-# DLL'leri birakiyor.
+# Onefile derlemesi (KickChatOverlay.spec) her calistirmada kendini
+# %TEMP%'e acan bir bootloader kullanir; bu ozel oz-acilim paterni
+# antivirus/Defender heuristiklerinde en cok yanlis pozitif alan
+# PyInstaller imzasidir. Bu spec ayni uygulamayi klasor (onedir)
+# olarak paketler - hicbir oz-acilim yapmaz, AV yanlis pozitifi
+# riskini onemli olcude dusurur. Dagitim icin klasoru zip'leyip
+# paylasmak yeterli.
 
 EXCLUDE_SUBSTR = [
     "opengl32sw", "avcodec", "avformat", "avutil", "swresample", "swscale",
@@ -22,13 +23,8 @@ EXCLUDE_SUBSTR = [
     "/sqldrivers/", "\\sqldrivers\\", "/tls/", "\\tls\\",
     "/webview/", "\\webview\\", "/sensorgestures/", "\\sensorgestures\\",
     "/renderplugins/", "\\renderplugins\\", "/webenginewidgets/",
-    # emote gorselinin gercek formati (webp/jpeg/gif olabilir) bilinmedigi
-    # icin o kod yollarina dokunulmuyor; sadece kesin kullanilmayan
-    # formatlar (mac ikonu, windows ikonu, tiff, tga, wbmp, dds, pdf) cikarildi
     "qicns", "qico.dll", "qtiff", "qtga", "qwbmp", "qpdf.dll", "qdds",
-    # dokunmatik / offscreen / minimal platform eklentileri kullanilmiyor
     "qtuiotouchplugin", "qoffscreen", "qminimal",
-    # QIcon'lari kod icinde QPixmap ile olusturuyoruz, svg icon-engine plugini gereksiz
     "qsvgicon",
 ]
 
@@ -60,16 +56,13 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="KickChatOverlay",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -78,4 +71,13 @@ exe = EXE(
     entitlements_file=None,
     icon="icon.ico",
     version="version_info.txt",
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="KickChatOverlay",
 )

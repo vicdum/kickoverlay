@@ -4,4 +4,6 @@ __pycache__/
 build/
 dist/
 *.exe
+*.zip
+KickChatOverlay/
 debug_binaries.txt

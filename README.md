@@ -16,7 +16,19 @@ Kick.com canlı yayın sohbetini oyunların veya masaüstünün üzerinde şeffa
 
 ## Kurulum (son kullanıcı)
 
-Kurulum gerekmez. [**Releases**](https://github.com/vicdum/kickoverlay/releases/latest) sayfasından `KickChatOverlay.exe` dosyasını indirip doğrudan çalıştır.
+Kurulum gerekmez. [**Releases**](https://github.com/vicdum/kickoverlay/releases/latest) sayfasından indir:
+
+- **`KickChatOverlay-portable.zip`** (önerilen) — indir, zip'i çıkar, klasördeki `KickChatOverlay.exe`'yi çalıştır.
+- **`KickChatOverlay.exe`** (tek dosya) — daha pratik ama antivirüs yanlış-pozitif riski biraz daha yüksek (aşağıya bak).
+
+### Antivirüs "virüs" uyarısı veriyor, ne yapmalıyım?
+
+Bu uygulama kod imzası (code signing sertifikası) içermiyor — ücretli, kimlik doğrulama gerektiren bir sertifika satın almadan bunu tamamen ortadan kaldırmak mümkün değil. Ayrıca overlay'in fare tıklamasını geçirme özelliği Windows'un düşük seviye pencere API'lerini (`SetWindowLongW`, `WS_EX_TRANSPARENT`) kullanır — bu, ekran katmanı oluşturan meşru araçlarla (ve bazı kötü amaçlı yazılımlarla) aynı davranış olduğu için bazı antivirüs yazılımları temkinli davranıp yanlış pozitif verebilir. Tek dosyalık (`--onefile`) derlemeler, çalışırken kendini geçici klasöre açtığı için bu konuda ekstra dikkat çeker; `KickChatOverlay-portable.zip` bunu yapmaz, o yüzden önerilen indirme budur.
+
+Eğer engellenirsen:
+1. Windows Defender / SmartScreen "Daha fazla bilgi" → "Yine de çalıştır" diyerek devam edebilirsin.
+2. Dosyanın bozulmadığını doğrulamak için SHA256 karma değerini kontrol et (her sürümün Release notlarında yayınlanır).
+3. Antivirüs yazılımın dosyayı silmişse, [VirusTotal](https://www.virustotal.com/) üzerinden tarayıp hangi motorun ne dediğine bakabilirsin; gerçek zararlı davranış (ağ trafiği, disk yazımı vb.) yok, kaynak kod bu depoda açık.
 
 ## Kullanım
 
@@ -36,11 +48,17 @@ python main.py
 ## .exe Derleme
 
 ```bash
-pip install pyinstaller
+pip install pyinstaller pillow
+
+# tek dosya (KickChatOverlay.exe)
 pyinstaller KickChatOverlay.spec --distpath .
+
+# portable klasor (KickChatOverlay/KickChatOverlay.exe) - antivirus
+# yanlis pozitifi daha az, zip'leyip dagitmak icin
+pyinstaller KickChatOverlay-onedir.spec --distpath .
 ```
 
-`KickChatOverlay.spec`, PyQt6'nın onefile derlemede varsayılan olarak tüm Qt6 klasörünü (Quick/Qml/Multimedia/Pdf gibi kullanılmayan ~40MB'lik parçalar dahil) pakete koymasını önleyip boyutu küçültüyor. Düz `pyinstaller --onefile --noconsole main.py` de çalışır ama çıktı belirgin şekilde daha büyük olur.
+Her iki spec dosyası da PyQt6'nın onefile/onedir derlemede varsayılan olarak tüm Qt6 klasörünü (Quick/Qml/Multimedia/Pdf gibi kullanılmayan ~40MB'lik parçalar dahil) pakete koymasını önleyip boyutu küçültüyor. Düz `pyinstaller --onefile --noconsole main.py` de çalışır ama çıktı belirgin şekilde daha büyük olur.
 
 ## Notlar / Bilinen Sınırlar
 
