@@ -16,7 +16,7 @@ Kick.com canlı yayın sohbetini oyunların veya masaüstünün üzerinde şeffa
 
 ## Kurulum (son kullanıcı)
 
-Kurulum gerekmez. Bu deponun **Releases** sekmesinden `KickChatOverlay.exe` dosyasını indirip doğrudan çalıştır.
+Kurulum gerekmez. [**Releases**](https://github.com/vicdum/kickoverlay/releases/latest) sayfasından `KickChatOverlay.exe` dosyasını indirip doğrudan çalıştır.
 
 ## Kullanım
 
