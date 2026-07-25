@@ -754,6 +754,11 @@ class SettingsWindow(QWidget):
         self.hide_notifications_checkbox.toggled.connect(self._emit_settings_changed)
         layout.addWidget(self.hide_notifications_checkbox)
 
+        self.remove_deleted_messages_checkbox = QCheckBox("Silinen Mesajları Overlay'den de Kaldır")
+        self.remove_deleted_messages_checkbox.setChecked(self.settings.get("remove_deleted_messages", False))
+        self.remove_deleted_messages_checkbox.toggled.connect(self._emit_settings_changed)
+        layout.addWidget(self.remove_deleted_messages_checkbox)
+
         layout.addStretch()
         return tab
 
@@ -848,6 +853,7 @@ class SettingsWindow(QWidget):
         self.settings["hide_bot_commands"] = self.hide_bot_commands_checkbox.isChecked()
         self.settings["bot_command_prefix"] = self.bot_prefix_input.text().strip() or "!"
         self.settings["hide_notifications"] = self.hide_notifications_checkbox.isChecked()
+        self.settings["remove_deleted_messages"] = self.remove_deleted_messages_checkbox.isChecked()
 
         self.settings["debug_logs"] = self.debug_logs_checkbox.isChecked()
 

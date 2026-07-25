@@ -61,6 +61,7 @@ DEFAULTS = {
     "hide_bot_commands": False,
     "bot_command_prefix": "!",
     "hide_notifications": False,
+    "remove_deleted_messages": False,
 
     "debug_logs": False,
 }

@@ -220,6 +220,12 @@ class App:
         # Tek bir bozuk mesaj yuzunden uygulamanin kapanmamasi icin
         # bu slot bastan sona korunuyor.
         try:
+            msg_type = data.get("type", "message")
+            if msg_type == "message_deleted":
+                if self.config.get("remove_deleted_messages"):
+                    self.overlay.remove_message_by_id(data.get("message_id"))
+                return
+
             sender = data.get("sender", {}) or {}
             username = sender.get("username", "???")
             identity = sender.get("identity", {}) or {}
@@ -228,8 +234,8 @@ class App:
             # dogru gorseli icin ay sayisi ("count") gerekiyor
             badges = [b for b in (identity.get("badges") or []) if isinstance(b, dict)]
             content = data.get("content", "")
-            msg_type = data.get("type", "message")
-            self.overlay.add_message(username, content, color, badges, msg_type)
+            message_id = data.get("id")
+            self.overlay.add_message(username, content, color, badges, msg_type, message_id)
         except Exception as exc:
             log.error("mesaj islenemedi: %s | veri=%.400r", exc, data, exc_info=True)
 

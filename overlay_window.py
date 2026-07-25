@@ -33,6 +33,7 @@ class OverlayWindow(QWidget):
         self._resizing = False
         self._resize_start_pos = None
         self._resize_start_size = None
+        self._message_widgets = {}
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -238,7 +239,7 @@ class OverlayWindow(QWidget):
 
     # ---- sohbet mesajlari --------------------------------------------
     def add_message(self, username: str, content: str, color: str, badges: list,
-                     msg_type: str = "message"):
+                    msg_type: str = "message", message_id=None):
         if self._is_filtered(username, content, msg_type):
             return
 
@@ -252,6 +253,15 @@ class OverlayWindow(QWidget):
         # Ses filtreden SONRA calar: gizlenen mesaj icin bildirim olmaz.
         if self._is_mentioned(content):
             self._play_mention_sound()
+
+        if message_id is not None:
+            mid = str(message_id).strip()
+            if mid:
+                prev = self._message_widgets.get(mid)
+                if prev is not None and prev is not widget:
+                    self._remove_message(prev)
+                widget.setProperty("overlay_message_id", mid)
+                self._message_widgets[mid] = widget
 
         self.messages_layout.addWidget(widget)
 
@@ -274,7 +284,7 @@ class OverlayWindow(QWidget):
             if item is None:
                 break
             if item.widget():
-                item.widget().deleteLater()
+                self._remove_message(item.widget())
                 trimmed += 1
         if trimmed:
             log.debug("%s eski mesaj kirpildi (limit=%s)", trimmed, MAX_MESSAGES)
@@ -284,12 +294,25 @@ class OverlayWindow(QWidget):
     def _remove_message(self, widget):
         if widget is None:
             return
+        mid = widget.property("overlay_message_id")
+        if mid is not None:
+            mid = str(mid)
+            if self._message_widgets.get(mid) is widget:
+                self._message_widgets.pop(mid, None)
         try:
             self.messages_layout.removeWidget(widget)
             widget.deleteLater()
         except RuntimeError:
             # widget zaten silinmis - zararsiz
             pass
+
+    def remove_message_by_id(self, message_id):
+        if message_id is None:
+            return
+        widget = self._message_widgets.pop(str(message_id).strip(), None)
+        if widget is None:
+            return
+        self._remove_message(widget)
 
     def _scroll_to_bottom(self):
         try:

@@ -14,6 +14,7 @@ Kick.com canlı yayın sohbetini oyunların veya masaüstünün üzerinde şeffa
 - **Öne çıkarma (highlight)** — seçtiğin kullanıcıların veya rollerin mesajlarını vurgula; arka plan boyama ve mesaj çerçevesi birbirinden bağımsız açılıp kapatılabilir
 - **Mesaj çerçevesi** — çerçeve rengi sabit seçtiğin renk, kullanıcı adı rengi ya da rol rengi (mod mavi, VIP altın, yayıncı kırmızı — rozetle aynı) olabilir; kalınlık ve sol kenar / tam çerçeve seçilebilir
 - **Mesaj filtreleme** — yasaklı kelimeler, engellenen kullanıcılar, bot mesajları/komutları, abone-bağış bildirimleri ayrı ayrı gizlenebilir
+- **Silinen mesaj senkronu (opsiyonel)** — istersen moderasyonla silinen mesajlar overlay'den de otomatik kaldırılır
 - **Canlı ayar güncelleme** — hiçbir ayar için başlat/durdur gerekmez, hepsi anında uygulanır
 - **Sistem tepsisi** — küçültünce tepsiye gizlenir, kapatınca uygulama tamamen çıkar
 - **Log kaydı** — beklenmedik kapanmaların sebebi diske yazılır (aşağıdaki "Sorun giderme")
@@ -128,6 +129,13 @@ pyinstaller KickChatOverlay-onedir.spec --distpath .
 ```
 
 Her iki spec dosyası da PyQt6'nın onefile/onedir derlemede varsayılan olarak tüm Qt6 klasörünü (Quick/Qml/Multimedia/Pdf gibi kullanılmayan ~40MB'lik parçalar dahil) pakete koymasını önleyip boyutu küçültüyor. Düz `pyinstaller --onefile --noconsole main.py` de çalışır ama çıktı belirgin şekilde daha büyük olur.
+
+## TODO
+
+- ikon / emote çözünürlüğünü yükseltme
+- gif emote'ların gözükmeme sorununun düzeltilmesi
+- hazır bildirim sesleri eklenmesi
+- arttırma / azaltma butonları çalışmama sorununun düzeltilmesi
 
 ## Notlar / Bilinen Sınırlar
 

@@ -215,6 +215,25 @@ class KickChatWorker(QThread):
                     log.warning("emote onbellege alinamadi: %s", exc)
                 self.message_received.emit(data)
 
+            elif event in ("App\\Events\\ChatMessageDeletedEvent", "App\\Events\\MessageDeletedEvent"):
+                try:
+                    data = json.loads(payload.get("data", "{}"))
+                except json.JSONDecodeError:
+                    log.debug("%s icerigi cozulemedi", event)
+                    return
+                message_id = (
+                    data.get("id")
+                    or data.get("message_id")
+                    or (data.get("message") or {}).get("id")
+                )
+                if message_id is None:
+                    log.debug("%s icinde mesaj id bulunamadi: %.300r", event, data)
+                    return
+                self.message_received.emit({
+                    "type": "message_deleted",
+                    "message_id": str(message_id),
+                })
+
         def on_error(ws, error):
             log.error("websocket hatasi: %s: %s", type(error).__name__, error)
             self.error_occurred.emit(str(error))
