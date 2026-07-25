@@ -4,6 +4,9 @@ import re
 import requests
 
 from config import APPDATA_DIR
+from logger import get_logger
+
+log = get_logger("emote")
 
 EMOTE_DIR = os.path.join(APPDATA_DIR, "emotes")
 EMOTE_TOKEN_RE = re.compile(r"\[emote:(\d+):([^\]]*)\]")
@@ -27,8 +30,10 @@ def ensure_cached(emote_id: str) -> bool:
         resp.raise_for_status()
         with open(path, "wb") as f:
             f.write(resp.content)
+        log.debug("emote indirildi id=%s (%s bayt)", emote_id, len(resp.content))
         return True
-    except Exception:
+    except Exception as exc:
+        log.debug("emote indirilemedi id=%s: %s", emote_id, exc)
         return False
 
 

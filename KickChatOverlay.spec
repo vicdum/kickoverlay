@@ -24,8 +24,11 @@ EXCLUDE_SUBSTR = [
     "/renderplugins/", "\\renderplugins\\", "/webenginewidgets/",
     # emote gorselinin gercek formati (webp/jpeg/gif olabilir) bilinmedigi
     # icin o kod yollarina dokunulmuyor; sadece kesin kullanilmayan
-    # formatlar (mac ikonu, windows ikonu, tiff, tga, wbmp, dds, pdf) cikarildi
-    "qicns", "qico.dll", "qtiff", "qtga", "qwbmp", "qpdf.dll", "qdds",
+    # formatlar (mac ikonu, tiff, tga, wbmp, dds, pdf) cikarildi.
+    # qico.dll BURADA KALMASIN: uygulama ikonu/tray icon calisma
+    # zamaninda icon.ico'yu QIcon ile okuyor, bu plugin olmadan QIcon
+    # sessizce null doner (tray "No Icon set" uyarisi verip kaybolur).
+    "qicns", "qtiff", "qtga", "qwbmp", "qpdf.dll", "qdds",
     # dokunmatik / offscreen / minimal platform eklentileri kullanilmiyor
     "qtuiotouchplugin", "qoffscreen", "qminimal",
     # QIcon'lari kod icinde QPixmap ile olusturuyoruz, svg icon-engine plugini gereksiz
@@ -42,7 +45,7 @@ a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[("icon.ico", ".")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

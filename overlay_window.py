@@ -3,7 +3,14 @@ import ctypes
 from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QLabel, QScrollArea, QVBoxLayout, QWidget
 
+import mentions
+import notify_sound
+from badge_icons import badge_types
 from chat_message_widget import ChatMessageWidget
+from logger import get_logger
+from turkish import tr_fold
+
+log = get_logger("overlay")
 
 GWL_EXSTYLE = -20
 WS_EX_LAYERED = 0x00080000
@@ -85,15 +92,19 @@ class OverlayWindow(QWidget):
     # ---- click-through (fare tiklamasini gecirme) ----------------------
     def set_click_through(self, enabled: bool):
         self._click_through = enabled
-        hwnd = int(self.winId())
-        user32 = ctypes.windll.user32
-        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        if enabled:
-            style |= WS_EX_LAYERED | WS_EX_TRANSPARENT
-        else:
-            style |= WS_EX_LAYERED
-            style &= ~WS_EX_TRANSPARENT
-        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+        try:
+            hwnd = int(self.winId())
+            user32 = ctypes.windll.user32
+            style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            if enabled:
+                style |= WS_EX_LAYERED | WS_EX_TRANSPARENT
+            else:
+                style |= WS_EX_LAYERED
+                style &= ~WS_EX_TRANSPARENT
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+            log.debug("click_through=%s hwnd=%s style=0x%08x", enabled, hwnd, style)
+        except Exception as exc:
+            log.error("click-through ayarlanamadi (enabled=%s): %s", enabled, exc, exc_info=True)
 
         if enabled:
             self.container.setStyleSheet("background: transparent;")
@@ -178,23 +189,35 @@ class OverlayWindow(QWidget):
         s = self.settings
         if not s.get("highlight_enabled"):
             return False
-        uname = (username or "").lower()
-        if uname in set(s.get("highlight_users") or []):
+        uname = tr_fold(username or "")
+        if uname in {tr_fold(u) for u in (s.get("highlight_users") or [])}:
             return True
         roles = set(s.get("highlight_roles") or [])
-        if roles and any(b in roles for b in (badges or [])):
+        # rozetler Kick'ten sozluk olarak gelir, sadece "type" alani onemli
+        if roles and any(b in roles for b in badge_types(badges)):
             return True
         return False
+
+    # ---- etiketlenme (mention) ------------------------------------------
+    def _is_mentioned(self, content: str) -> bool:
+        return mentions.contains(content, mentions.pattern_for(self.settings))
+
+    def _play_mention_sound(self):
+        s = self.settings
+        if not s.get("mention_sound_enabled"):
+            return
+        notify_sound.play(s.get("mention_sound_path"),
+                          s.get("mention_sound_cooldown", 3))
 
     # ---- filtreleme -----------------------------------------------------
     def _is_filtered(self, username: str, content: str, msg_type: str) -> bool:
         s = self.settings
-        uname = (username or "").lower()
+        uname = tr_fold(username or "")
 
-        if uname in set(s.get("blocked_users") or []):
+        if uname in {tr_fold(u) for u in (s.get("blocked_users") or [])}:
             return True
 
-        if s.get("hide_bot_messages") and uname in set(s.get("bot_users") or []):
+        if s.get("hide_bot_messages") and uname in {tr_fold(u) for u in (s.get("bot_users") or [])}:
             return True
 
         if s.get("hide_bot_commands"):
@@ -207,8 +230,8 @@ class OverlayWindow(QWidget):
 
         keywords = s.get("blocked_keywords") or []
         if keywords:
-            low = (content or "").lower()
-            if any(kw in low for kw in keywords):
+            low = tr_fold(content or "")
+            if any(tr_fold(kw) in low for kw in keywords):
                 return True
 
         return False
@@ -220,25 +243,57 @@ class OverlayWindow(QWidget):
             return
 
         highlighted = self._is_highlighted(username, badges)
-        widget = ChatMessageWidget(username, content, color, badges, self.settings, highlighted)
+        try:
+            widget = ChatMessageWidget(username, content, color, badges, self.settings, highlighted)
+        except Exception as exc:
+            log.error("mesaj olusturulamadi (user=%r): %s", username, exc, exc_info=True)
+            return
+
+        # Ses filtreden SONRA calar: gizlenen mesaj icin bildirim olmaz.
+        if self._is_mentioned(content):
+            self._play_mention_sound()
+
         self.messages_layout.addWidget(widget)
 
-        duration_ms = self.settings["message_duration"] * 1000
-        QTimer.singleShot(duration_ms, lambda w=widget: self._remove_message(w))
+        # Zamanlayici widget'a parent edilir: MAX_MESSAGES tasmasi yuzunden
+        # widget once silinirse timer da onunla birlikte yok olur ve
+        # silinmis C++ nesnesi uzerinde tetiklenmez. Eskiden burada
+        # QTimer.singleShot(...) kullaniliyordu; yogun sohbette widget
+        # deleteLater() ile silindikten sonra timer atesleniyor ve
+        # "wrapped C/C++ object ... has been deleted" RuntimeError'i
+        # olusuyordu. Bir slot icindeki yakalanmayan bu hata PyQt'de
+        # qFatal() cagirtip uygulamayi sessizce kapatiyordu.
+        timer = QTimer(widget)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda w=widget: self._remove_message(w))
+        timer.start(max(1, int(self.settings.get("message_duration", 12)) * 1000))
 
+        trimmed = 0
         while self.messages_layout.count() > MAX_MESSAGES:
             item = self.messages_layout.takeAt(0)
+            if item is None:
+                break
             if item.widget():
                 item.widget().deleteLater()
+                trimmed += 1
+        if trimmed:
+            log.debug("%s eski mesaj kirpildi (limit=%s)", trimmed, MAX_MESSAGES)
 
         QTimer.singleShot(0, self._scroll_to_bottom)
 
     def _remove_message(self, widget):
         if widget is None:
             return
-        self.messages_layout.removeWidget(widget)
-        widget.deleteLater()
+        try:
+            self.messages_layout.removeWidget(widget)
+            widget.deleteLater()
+        except RuntimeError:
+            # widget zaten silinmis - zararsiz
+            pass
 
     def _scroll_to_bottom(self):
-        bar = self.scroll.verticalScrollBar()
-        bar.setValue(bar.maximum())
+        try:
+            bar = self.scroll.verticalScrollBar()
+            bar.setValue(bar.maximum())
+        except RuntimeError:
+            pass

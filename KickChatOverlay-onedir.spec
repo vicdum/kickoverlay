@@ -23,7 +23,10 @@ EXCLUDE_SUBSTR = [
     "/sqldrivers/", "\\sqldrivers\\", "/tls/", "\\tls\\",
     "/webview/", "\\webview\\", "/sensorgestures/", "\\sensorgestures\\",
     "/renderplugins/", "\\renderplugins\\", "/webenginewidgets/",
-    "qicns", "qico.dll", "qtiff", "qtga", "qwbmp", "qpdf.dll", "qdds",
+    # qico.dll BURADA KALMASIN: uygulama ikonu/tray icon calisma
+    # zamaninda icon.ico'yu QIcon ile okuyor, bu plugin olmadan QIcon
+    # sessizce null doner (tray "No Icon set" uyarisi verip kaybolur).
+    "qicns", "qtiff", "qtga", "qwbmp", "qpdf.dll", "qdds",
     "qtuiotouchplugin", "qoffscreen", "qminimal",
     "qsvgicon",
 ]
@@ -38,7 +41,7 @@ a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[("icon.ico", ".")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
