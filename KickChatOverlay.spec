@@ -45,7 +45,7 @@ a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=[("icon.ico", ".")],
+    datas=[("icon.ico", "."), ("sounds", "sounds")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

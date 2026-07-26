@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import QApplication, QLabel, QScrollArea, QVBoxLayout, QWid
 import mentions
 import notify_sound
 from badge_icons import badge_types
-from chat_message_widget import ChatMessageWidget
+from chat_message_widget import ChatMessageWidget, EventMessageWidget
 from logger import get_logger
 from turkish import tr_fold
 
@@ -238,7 +238,7 @@ class OverlayWindow(QWidget):
 
     # ---- sohbet mesajlari --------------------------------------------
     def add_message(self, username: str, content: str, color: str, badges: list,
-                     msg_type: str = "message"):
+                     msg_type: str = "message", message_id: str | None = None):
         if self._is_filtered(username, content, msg_type):
             return
 
@@ -249,10 +249,33 @@ class OverlayWindow(QWidget):
             log.error("mesaj olusturulamadi (user=%r): %s", username, exc, exc_info=True)
             return
 
+        # Mesaj sadece engellenen bir emote/emoji'den olusuyorsa geriye ne
+        # gorsel ne metin kalir - bos baloncuk gostermek yerine tamamen atla.
+        if widget.content_is_empty:
+            widget.deleteLater()
+            return
+
+        # Kick'ten MessageDeletedEvent/UserBannedEvent gelirse bu mesaji
+        # bulup kaldirabilmek icin kimlik bilgisi widget'a igneleniyor.
+        widget.kick_message_id = message_id
+        widget.kick_username_folded = tr_fold(username or "")
+
         # Ses filtreden SONRA calar: gizlenen mesaj icin bildirim olmaz.
         if self._is_mentioned(content):
             self._play_mention_sound()
 
+        self._finalize_new_message(widget)
+
+    # ---- sohbet disi etkinlikler (abonelik/hediye/kicks/ban vb.) --------
+    def add_event_message(self, text: str, kind: str):
+        try:
+            widget = EventMessageWidget(text, kind, self.settings)
+        except Exception as exc:
+            log.error("etkinlik mesaji olusturulamadi (%s): %s", kind, exc, exc_info=True)
+            return
+        self._finalize_new_message(widget)
+
+    def _finalize_new_message(self, widget):
         self.messages_layout.addWidget(widget)
 
         # Zamanlayici widget'a parent edilir: MAX_MESSAGES tasmasi yuzunden
@@ -280,6 +303,34 @@ class OverlayWindow(QWidget):
             log.debug("%s eski mesaj kirpildi (limit=%s)", trimmed, MAX_MESSAGES)
 
         QTimer.singleShot(0, self._scroll_to_bottom)
+
+    # ---- Kick moderasyonu: silinen mesaj / banlanan kullanici -----------
+    def remove_message_by_id(self, message_id: str):
+        if not message_id or not self.settings.get("delete_removed_messages", True):
+            return
+        for i in range(self.messages_layout.count()):
+            item = self.messages_layout.itemAt(i)
+            widget = item.widget() if item else None
+            if widget is not None and getattr(widget, "kick_message_id", None) == message_id:
+                log.debug("mesaj sohbetten silindi, overlay'den kaldiriliyor (id=%s)", message_id)
+                self._remove_message(widget)
+                return
+
+    def remove_messages_by_username(self, username: str):
+        if not username or not self.settings.get("delete_removed_messages", True):
+            return
+        folded = tr_fold(username)
+        to_remove = []
+        for i in range(self.messages_layout.count()):
+            item = self.messages_layout.itemAt(i)
+            widget = item.widget() if item else None
+            if widget is not None and getattr(widget, "kick_username_folded", None) == folded:
+                to_remove.append(widget)
+        if to_remove:
+            log.debug("kullanici banlandi/susturuldu (%s), %s mesaj overlay'den kaldiriliyor",
+                      username, len(to_remove))
+        for widget in to_remove:
+            self._remove_message(widget)
 
     def _remove_message(self, widget):
         if widget is None:

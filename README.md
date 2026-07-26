@@ -10,10 +10,13 @@ Kick.com canlı yayın sohbetini oyunların veya masaüstünün üzerinde şeffa
 - **Gerçek Kick rozetleri** — moderatör/VIP/kurucu/OG rozetleri Kick'in kendi vektörel ikonları; abone rozetleri kanalın kendi yüklediği görsellerden, abonelik ayına göre doğru kademe seçilerek indirilip cache'lenir
 - **Renk özelleştirme** — kullanıcı adı rengi (Kick rengi ya da özel), mesaj yazı rengi, arka plan rengi/koyulugu
 - **Yazı tipi** — sistemde kurulu fontlardan seçim, boyut, 100–900 arası kalınlık ve italik; ayarlar penceresinde canlı ön izleme
-- **Etiket vurgulama (mention)** — kendi adın (ya da takip ettiğin isimler) sohbette geçtiğinde etiket renkli/kalın gösterilir; istersen mesajın arka planını boyar, çerçeve çizer ve `.wav` bildirim sesi çalar
+- **Etiket vurgulama (mention)** — kendi adın (ya da takip ettiğin isimler) sohbette geçtiğinde etiket renkli/kalın gösterilir; istersen mesajın arka planını boyar, çerçeve çizer ve hazır seslerden ya da kendi `.wav`/`.mp3` dosyandan bildirim sesi çalar
 - **Öne çıkarma (highlight)** — seçtiğin kullanıcıların veya rollerin mesajlarını vurgula; arka plan boyama ve mesaj çerçevesi birbirinden bağımsız açılıp kapatılabilir
 - **Mesaj çerçevesi** — çerçeve rengi sabit seçtiğin renk, kullanıcı adı rengi ya da rol rengi (mod mavi, VIP altın, yayıncı kırmızı — rozetle aynı) olabilir; kalınlık ve sol kenar / tam çerçeve seçilebilir
-- **Mesaj filtreleme** — yasaklı kelimeler, engellenen kullanıcılar, bot mesajları/komutları, abone-bağış bildirimleri ayrı ayrı gizlenebilir
+- **Mesaj filtreleme** — yasaklı kelimeler, engellenen kullanıcılar, bot mesajları/komutları, abone-bağış bildirimleri, emote/emoji ayrı ayrı gizlenebilir
+- **Kick etkinlik bildirimleri** — abonelik, hediye abonelik, kicks bağışı, ban/unban, timeout olayları overlay'de bildirim olarak gösterilir, her biri ayrı açılıp kapatılabilir
+- **Moderasyonla senkron** — sohbette silinen/moderatörce kaldırılan mesajlar ve banlanan kullanıcının mesajları overlay'den de otomatik silinir (isteğe bağlı kapatılabilir)
+- **Otomatik güncelleme** — açılışta GitHub Releases'e bakıp yeni sürüm varsa haber verir, tek tıkla indirip kurar
 - **Canlı ayar güncelleme** — hiçbir ayar için başlat/durdur gerekmez, hepsi anında uygulanır
 - **Sistem tepsisi** — küçültünce tepsiye gizlenir, kapatınca uygulama tamamen çıkar
 - **Log kaydı** — beklenmedik kapanmaların sebebi diske yazılır (aşağıdaki "Sorun giderme")
@@ -37,7 +40,7 @@ Eğer engellenirsen:
 ## Kullanım
 
 1. Uygulamayı aç, ayarlar penceresine Kick kullanıcı adını gir
-2. Genel / Görünüm / Öne Çıkanlar / Etiket / Filtreler sekmelerinden istediğin gibi düzenle
+2. Genel / Görünüm / Öne Çıkanlar / Etiket / Filtreler / Etkinlikler sekmelerinden istediğin gibi düzenle
 3. **Başlat**'a bas — overlay ekrana gelir, ayarlar penceresi açık kalır
 4. Overlay'i konumlandırmak için "Pencere Konumunu Ayarla"yı işaretle, sürükle/boyutlandır, işareti kaldır
 5. Ayarlar penceresini simge durumuna küçültürsen sistem tepsisine gizlenir (tray ikonuna çift tıkla geri aç); **X** ile kapatırsan uygulama tamamen çıkar
@@ -80,11 +83,11 @@ Eşleşince neler olacağını sen seçersin:
 | Etiket Rengi + kalın | Sadece ismin geçtiği kelime boyanır, mesajın kalanı normal kalır |
 | Mesajın arka planını boya | Tüm mesaj balonu seçtiğin renge/yoğunluğa boyanır |
 | Mesaja çerçeve çiz | Kendi rengi, kalınlığı (0–12 px) ve konumu (sol kenar / tam çerçeve) olan çerçeve |
-| Etiketlendiğimde ses çal | `.wav` dosyası çalar; dosya seçilmezse Windows bildirim sesi |
+| Etiketlendiğimde ses çal | Açılır listeden hazır bir ses seç, kendi `.wav`/`.mp3` dosyanı seç ya da boş bırakıp Windows bildirim sesini kullan |
 
 **Öncelik:** etiket arka planı ve çerçevesi, Öne Çıkanlar vurgusunu ezer — adının geçtiği mesaj, yazanın rolünden daha önemli.
 
-**Ses hakkında:** Windows'un kendi ses API'si (`winsound`) kullanılıyor, bu yüzden yalnızca `.wav` çalar ve ses seviyesi uygulama içinden ayarlanamaz (Windows ses mikserinden ayarlanır). QtMultimedia bilerek pakete konmuyor, `.exe` boyutunu ~10 MB büyütürdü. **Sesler Arası En Az** değeri iki bildirim arasındaki bekleme süresidir; kalabalık sohbette 0 yapmak sesi makineli tüfeğe çevirir, varsayılan 3 sn.
+**Ses hakkında:** Windows'un kendi ses API'leri (`winsound` + `winmm` MCI) kullanılıyor, bu yüzden `.wav` ve `.mp3` çalar (`.flac` desteklenmez), ses seviyesi uygulama içinden ayarlanamaz (Windows ses mikserinden ayarlanır). QtMultimedia bilerek pakete konmuyor, `.exe` boyutunu ~10 MB büyütürdü. **Sesler Arası En Az** değeri iki bildirim arasındaki bekleme süresidir; kalabalık sohbette 0 yapmak sesi makineli tüfeğe çevirir, varsayılan 3 sn.
 
 ## Sorun Giderme / Log Dosyaları
 

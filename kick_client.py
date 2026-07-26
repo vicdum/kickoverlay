@@ -49,6 +49,12 @@ class KickChatWorker(QThread):
     connected = pyqtSignal()
     disconnected = pyqtSignal()
     message_received = pyqtSignal(dict)
+    message_deleted = pyqtSignal(str)
+    user_banned = pyqtSignal(dict)
+    user_unbanned = pyqtSignal(dict)
+    subscription_event = pyqtSignal(dict)
+    gifted_subs_event = pyqtSignal(dict)
+    kicks_gifted_event = pyqtSignal(dict)
     status_changed = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
 
@@ -58,6 +64,8 @@ class KickChatWorker(QThread):
         self._ws = None
         self._running = True
         self._chatroom_id = None
+        self._channel_id = None
+        self._user_id = None
         self._connected_ok = False
         self._consecutive_failures = 0
 
@@ -82,8 +90,16 @@ class KickChatWorker(QThread):
                 return
             self.msleep(100)
 
-    def _fetch_channel_info(self) -> int:
-        """chatroom_id'yi dondurur ve ayni yanittan abone rozetlerini alir."""
+    def _fetch_channel_info(self):
+        """chatroom_id / channel_id / user_id'yi cikarir, ayni yanittan
+        abone rozetlerini alir.
+
+        Sohbet mesajlari ve ban/silme olaylari chatroom_id kanalinda gelir,
+        ama abonelik/hediye/kicks gibi yayinci-seviyesi olaylar Kick'te
+        tutarsiz bir sekilde farkli kanallarda (channel_id ya da user_id
+        anahtarli) yayinlaniyor - bu yuzden ucu de saklanip _run_websocket
+        hepsine birden abone oluyor.
+        """
         url = KICK_API_URL.format(username=self.username)
         try:
             resp = requests.get(url, headers=HEADERS, timeout=(5, 10))
@@ -95,10 +111,15 @@ class KickChatWorker(QThread):
             ) from exc
 
         data = resp.json()
-        chatroom_id = (data.get("chatroom") or {}).get("id")
+        chatroom = data.get("chatroom") or {}
+        chatroom_id = chatroom.get("id")
         if not chatroom_id:
             raise ValueError("chatroom_id bulunamadi, kullanici adini kontrol edin.")
-        log.info("chatroom_id=%s (kanal=%s)", chatroom_id, self.username)
+        self._chatroom_id = chatroom_id
+        self._channel_id = data.get("id") or chatroom.get("channel_id")
+        self._user_id = data.get("user_id")
+        log.info("chatroom_id=%s channel_id=%s user_id=%s (kanal=%s)",
+                 self._chatroom_id, self._channel_id, self._user_id, self.username)
 
         # Abone rozetleri kanala ozel; bu adim basarisiz olsa bile sohbet
         # calismaya devam etmeli, o yuzden hata yutuluyor (gomulu yedek
@@ -107,7 +128,6 @@ class KickChatWorker(QThread):
             sub_badges.set_tiers(data.get("subscriber_badges"))
         except Exception as exc:
             log.warning("abone rozetleri okunamadi: %s", exc)
-        return chatroom_id
 
     def run(self):
         # QThread.run icinde firlayan hata Python'un threading.excepthook'una
@@ -120,7 +140,7 @@ class KickChatWorker(QThread):
                 self._connected_ok = False
                 try:
                     self.status_changed.emit(f"'{self.username}' kanal bilgisi aliniyor...")
-                    self._chatroom_id = self._fetch_channel_info()
+                    self._fetch_channel_info()
                     # HTTP istegi surerken stop() cagrilmis olabilir; bu
                     # kontrol olmadan websocket stop'tan SONRA aciliyordu.
                     if not self._running:
@@ -177,6 +197,30 @@ class KickChatWorker(QThread):
         else:
             log.debug("baglanti koptu, %s sn sonra yeniden denenecek (deneme %s)", delay, attempt)
 
+    def _subscribe_all(self, ws):
+        """Sohbet olaylari (mesaj/silme/ban) chatroom kanalinda gelir, ama
+        abonelik/hediye/kicks gibi yayinci-seviyesi olaylar Kick'te tutarsiz
+        sekilde chatroom'un eski takma adlarinda ya da yayincinin channel_id/
+        user_id anahtarli kanallarinda yayinlanabiliyor. Hangisinin gercekte
+        kullanildigi olay tipine ve zamana gore degisebildigi icin hepsine
+        birden abone olunuyor; var olmayan bir kanala abone olmak zararsiz.
+        """
+        candidates = [
+            f"chatrooms.{self._chatroom_id}.v2",
+            f"chatrooms.{self._chatroom_id}",
+            f"chatroom_{self._chatroom_id}",
+            f"channel.{self._channel_id}",
+            f"channel_{self._channel_id}",
+            f"channel.{self._user_id}",
+        ]
+        seen = set()
+        for name in candidates:
+            if "None" in name or name in seen:
+                continue
+            seen.add(name)
+            ws.send(json.dumps({"event": "pusher:subscribe", "data": {"channel": name}}))
+        log.debug("pusher kanallarina abone olundu: %s", sorted(seen))
+
     def _run_websocket(self):
         def on_open(ws):
             log.info("websocket acildi")
@@ -188,14 +232,16 @@ class KickChatWorker(QThread):
                 log.debug("cozulemeyen websocket mesaji atlandi (%s bayt)", len(message or ""))
                 return
 
-            event = payload.get("event")
+            raw_event = payload.get("event") or ""
+            # Kick bazi olaylari "App\Events\X" onekiyle, bazilarini ciplak
+            # "X" olarak yolluyor (gozlemlendi: SubscriptionEvent/UserBannedEvent
+            # onekli, GiftedSubscriptionsEvent/KicksGifted/RewardRedeemedEvent
+            # ciplak). Oneki atip tek koldan eslestirmek ikisini de kapsar.
+            prefix = "App\\Events\\"
+            event = raw_event[len(prefix):] if raw_event.startswith(prefix) else raw_event
 
             if event == "pusher:connection_established":
-                channel = f"chatrooms.{self._chatroom_id}.v2"
-                ws.send(json.dumps({
-                    "event": "pusher:subscribe",
-                    "data": {"channel": channel},
-                }))
+                self._subscribe_all(ws)
                 self._connected_ok = True
                 self.connected.emit()
                 self.status_changed.emit("Baglandi, sohbet dinleniyor.")
@@ -203,7 +249,7 @@ class KickChatWorker(QThread):
             elif event == "pusher:ping":
                 ws.send(json.dumps({"event": "pusher:pong", "data": {}}))
 
-            elif event == "App\\Events\\ChatMessageEvent":
+            elif event == "ChatMessageEvent":
                 try:
                     data = json.loads(payload.get("data", "{}"))
                 except json.JSONDecodeError:
@@ -214,6 +260,96 @@ class KickChatWorker(QThread):
                 except Exception as exc:
                     log.warning("emote onbellege alinamadi: %s", exc)
                 self.message_received.emit(data)
+
+            elif event == "MessageDeletedEvent":
+                try:
+                    data = json.loads(payload.get("data", "{}"))
+                except json.JSONDecodeError:
+                    log.debug("MessageDeletedEvent icerigi cozulemedi")
+                    return
+                message_id = (data.get("message") or {}).get("id")
+                if message_id:
+                    log.debug("mesaj silindi (id=%s)", message_id)
+                    self.message_deleted.emit(message_id)
+
+            elif event == "UserBannedEvent":
+                try:
+                    data = json.loads(payload.get("data", "{}"))
+                except json.JSONDecodeError:
+                    log.debug("UserBannedEvent icerigi cozulemedi")
+                    return
+                username = (data.get("user") or {}).get("username")
+                if username:
+                    info = {
+                        "username": username,
+                        "permanent": bool(data.get("permanent")),
+                        "duration": data.get("duration"),
+                        "expires_at": data.get("expires_at"),
+                        "banned_by": (data.get("banned_by") or {}).get("username"),
+                    }
+                    log.debug("kullanici banlandi/susturuldu: %s (kalici=%s)",
+                              username, info["permanent"])
+                    self.user_banned.emit(info)
+
+            elif event == "UserUnbannedEvent":
+                try:
+                    data = json.loads(payload.get("data", "{}"))
+                except json.JSONDecodeError:
+                    log.debug("UserUnbannedEvent icerigi cozulemedi")
+                    return
+                username = (data.get("user") or {}).get("username")
+                if username:
+                    info = {
+                        "username": username,
+                        "unbanned_by": (data.get("unbanned_by") or {}).get("username"),
+                    }
+                    log.debug("kullanicinin bani kaldirildi: %s", username)
+                    self.user_unbanned.emit(info)
+
+            elif event == "SubscriptionEvent":
+                try:
+                    data = json.loads(payload.get("data", "{}"))
+                except json.JSONDecodeError:
+                    log.debug("SubscriptionEvent icerigi cozulemedi")
+                    return
+                username = data.get("username")
+                if username:
+                    info = {"username": username, "months": data.get("months") or 1}
+                    log.debug("abonelik: %s (%s ay)", username, info["months"])
+                    self.subscription_event.emit(info)
+
+            elif event == "GiftedSubscriptionsEvent":
+                try:
+                    data = json.loads(payload.get("data", "{}"))
+                except json.JSONDecodeError:
+                    log.debug("GiftedSubscriptionsEvent icerigi cozulemedi")
+                    return
+                gifted = data.get("gifted_usernames") or []
+                info = {
+                    "gifter_username": data.get("gifter_username") or "Anonim",
+                    "gifted_usernames": gifted,
+                    "gifter_total": data.get("gifter_total") or len(gifted),
+                }
+                log.debug("hediye abonelik: %s -> %s kisi",
+                          info["gifter_username"], len(gifted))
+                self.gifted_subs_event.emit(info)
+
+            elif event == "KicksGifted":
+                try:
+                    data = json.loads(payload.get("data", "{}"))
+                except json.JSONDecodeError:
+                    log.debug("KicksGifted icerigi cozulemedi")
+                    return
+                sender = data.get("sender") or {}
+                gift = data.get("gift") or {}
+                info = {
+                    "sender_username": sender.get("username") or "???",
+                    "gift_name": gift.get("name") or "Kicks",
+                    "amount": gift.get("amount") or 0,
+                }
+                log.debug("kicks hediye: %s x%s (%s)",
+                          info["sender_username"], info["amount"], info["gift_name"])
+                self.kicks_gifted_event.emit(info)
 
         def on_error(ws, error):
             log.error("websocket hatasi: %s: %s", type(error).__name__, error)

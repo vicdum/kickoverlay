@@ -1,7 +1,7 @@
 import json
 import os
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 APPDATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "KickOverlay")
 CONFIG_PATH = os.path.join(APPDATA_DIR, "config.json")
@@ -56,11 +56,23 @@ DEFAULTS = {
 
     "blocked_keywords": [],
     "blocked_users": [],
+    "block_emotes": False,
+    "block_emojis": False,
+    "delete_removed_messages": True,
     "hide_bot_messages": False,
     "bot_users": ["botrix", "kicklet", "streamelements", "fossabot", "wizebot", "moobot"],
     "hide_bot_commands": False,
     "bot_command_prefix": "!",
     "hide_notifications": False,
+
+    # Kick'in sohbet disi etkinlikleri (abonelik, hediye, ban vb.) - her biri
+    # ayri acilip kapatilabilir
+    "show_event_subscription": True,
+    "show_event_gifted_subs": True,
+    "show_event_kicks": True,
+    "show_event_ban": True,
+    "show_event_unban": True,
+    "show_event_timeout": True,
 
     "debug_logs": False,
 }

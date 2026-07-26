@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
 )
 
 import notify_sound
+from config import APP_VERSION
 from logger import LOG_PATH, get_logger, open_log_folder
 from turkish import tr_fold
 
@@ -48,6 +49,23 @@ QLineEdit, QSpinBox, QComboBox {
     padding: 5px 8px; color: #e8e8ea;
 }
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border: 1px solid #53FC18; }
+/* QSpinBox'a border/padding/border-radius verilince Qt varsayilan
+   artir/azalt dugmelerinin gercek tiklama alanini stilden BAGIMSIZ
+   hesapliyor - ok gorseli goruneni ile gercek buton kutusu uyusmuyordu.
+   ::up-button/::down-button'a gecerli bir konum/boyut vermek ikisini ayni
+   dikdortgenden turetip gorunum/tiklama alanini tekrar hizaliyor.
+   ONEMLI: bu iki secicide sadece geometri (subcontrol-origin/position/
+   width/height) tanimli kalmali - background ya da border gibi TEK bir
+   gorsel ozellik bile eklense Qt'nin varsayilan ok ikonunu tamamen
+   cizmemesine yol aciyor (denenip dogrulandi); ok rengi/kutusu Qt'nin
+   kendi tema paletinden (yukaridaki karanlik QWidget paleti) geliyor. */
+QSpinBox { padding-right: 20px; }
+QSpinBox::up-button, QSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 18px;
+}
+QSpinBox::up-button { subcontrol-position: top right; height: 13px; }
+QSpinBox::down-button { subcontrol-position: bottom right; height: 13px; }
 QPushButton {
     background: #26282e; border: 1px solid #33343a; border-radius: 6px;
     padding: 8px 14px; color: #e8e8ea;
@@ -119,6 +137,8 @@ class SettingsWindow(QWidget):
     settings_changed = pyqtSignal(dict)
     move_mode_toggled = pyqtSignal(bool)
     quit_requested = pyqtSignal()
+    check_update_requested = pyqtSignal()
+    update_now_requested = pyqtSignal()
 
     def __init__(self, initial_settings: dict):
         super().__init__()
@@ -140,6 +160,7 @@ class SettingsWindow(QWidget):
         tabs.addTab(self._scrollable(self._build_highlight_tab()), "Öne Çıkanlar")
         tabs.addTab(self._scrollable(self._build_mention_tab()), "Etiket")
         tabs.addTab(self._scrollable(self._build_filter_tab()), "Filtreler")
+        tabs.addTab(self._scrollable(self._build_events_tab()), "Etkinlikler")
         layout.addWidget(tabs)
 
         # Soluklastirma tum sekmeler kurulduktan sonra: bu cagrilar
@@ -165,9 +186,16 @@ class SettingsWindow(QWidget):
 
         layout.addLayout(btn_row)
 
-        credit_label = QLabel("Made with ❤️ by vicdum")
+        credit_label = QLabel(
+            '<a href="https://clou.tr/?utm_source=kickoverlay&utm_medium=app'
+            '&utm_campaign=credit" style="color:#53FC18;text-decoration:none;">'
+            'Made with ❤️ by vicdum</a>'
+        )
         credit_label.setObjectName("HintLabel")
         credit_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        credit_label.setTextFormat(Qt.TextFormat.RichText)
+        credit_label.setOpenExternalLinks(True)
+        credit_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         layout.addWidget(credit_label)
 
         self._fit_to_screen()
@@ -233,8 +261,69 @@ class SettingsWindow(QWidget):
         layout.addWidget(hint)
 
         layout.addStretch()
+        layout.addWidget(self._build_update_section())
         layout.addWidget(self._build_log_section())
         return tab
+
+    # ---- surum / guncelleme bolumu --------------------------------------
+    def _build_update_section(self) -> QWidget:
+        box = QWidget()
+        box_layout = QVBoxLayout(box)
+        box_layout.setContentsMargins(0, 8, 0, 0)
+
+        row = QHBoxLayout()
+        version_label = QLabel(f"Sürüm: {APP_VERSION}")
+        version_label.setObjectName("HintLabel")
+        row.addWidget(version_label)
+        row.addStretch()
+        self.check_update_btn = QPushButton("Güncellemeleri Kontrol Et")
+        self.check_update_btn.clicked.connect(self.check_update_requested.emit)
+        row.addWidget(self.check_update_btn)
+        box_layout.addLayout(row)
+
+        self.update_status_label = QLabel("")
+        self.update_status_label.setObjectName("HintLabel")
+        self.update_status_label.setWordWrap(True)
+        self.update_status_label.hide()
+        box_layout.addWidget(self.update_status_label)
+
+        self.update_now_btn = QPushButton("Güncelle ve Yeniden Başlat")
+        self.update_now_btn.setObjectName("StartButton")
+        self.update_now_btn.clicked.connect(self.update_now_requested.emit)
+        self.update_now_btn.hide()
+        box_layout.addWidget(self.update_now_btn)
+
+        return box
+
+    def set_update_checking(self):
+        self.check_update_btn.setEnabled(False)
+        self.update_now_btn.hide()
+        self.update_status_label.setText("Güncellemeler kontrol ediliyor...")
+        self.update_status_label.show()
+
+    def set_update_available(self, version: str):
+        self.check_update_btn.setEnabled(True)
+        self.update_status_label.setText(f"Yeni sürüm mevcut: v{version}")
+        self.update_status_label.show()
+        self.update_now_btn.setEnabled(True)
+        self.update_now_btn.setText("Güncelle ve Yeniden Başlat")
+        self.update_now_btn.show()
+
+    def set_update_uptodate(self):
+        self.check_update_btn.setEnabled(True)
+        self.update_now_btn.hide()
+        self.update_status_label.setText("En güncel sürümü kullanıyorsun.")
+        self.update_status_label.show()
+
+    def set_update_failed(self, message: str):
+        self.check_update_btn.setEnabled(True)
+        self.update_status_label.setText(f"Kontrol edilemedi: {message}")
+        self.update_status_label.show()
+
+    def set_update_progress(self, text: str):
+        self.update_now_btn.setEnabled(False)
+        self.update_status_label.setText(text)
+        self.update_status_label.show()
 
     # ---- tanilama / log bolumu -----------------------------------------
     def _build_log_section(self) -> QWidget:
@@ -614,8 +703,21 @@ class SettingsWindow(QWidget):
         self.mention_sound_checkbox.setChecked(self.settings.get("mention_sound_enabled", False))
         layout.addWidget(self.mention_sound_checkbox)
 
+        current_path = self.settings.get("mention_sound_path", "")
+
+        self.mention_sound_combo = QComboBox()
+        self.mention_sound_combo.addItem("Windows sistem sesi (varsayılan)", "")
+        for token, label in notify_sound.list_builtin_sounds():
+            self.mention_sound_combo.addItem(label, token)
+        self.mention_sound_combo.addItem("Özel dosya (aşağıdan seç)", "__custom__")
+        custom_index = self.mention_sound_combo.count() - 1
+        match_index = self.mention_sound_combo.findData(current_path)
+        self.mention_sound_combo.setCurrentIndex(match_index if match_index >= 0 else custom_index)
+        self.mention_sound_combo.currentIndexChanged.connect(self._on_sound_combo_changed)
+        layout.addWidget(self.mention_sound_combo)
+
         sound_row = QHBoxLayout()
-        self.mention_sound_input = QLineEdit(self.settings.get("mention_sound_path", ""))
+        self.mention_sound_input = QLineEdit(current_path)
         self.mention_sound_input.setPlaceholderText("boş = Windows sistem sesi")
         self.mention_sound_input.editingFinished.connect(self._emit_settings_changed)
         sound_row.addWidget(self.mention_sound_input)
@@ -638,9 +740,9 @@ class SettingsWindow(QWidget):
         cooldown_form.addRow("Sesler Arası En Az:", self.mention_cooldown_spin)
         layout.addLayout(cooldown_form)
 
-        sound_hint = QLabel("Sadece .wav dosyası çalınır (Windows'un kendi ses API'si "
-                            "kullanılıyor, ses seviyesi uygulamadan ayarlanamaz). "
-                            "Dosya seçilmezse sistem bildirim sesi çalar.")
+        sound_hint = QLabel("Yalnızca .wav ve .mp3 çalınabilir (ses seviyesi uygulamadan "
+                            "ayarlanamaz), .flac desteklenmez. Dosya seçilmezse sistem "
+                            "bildirim sesi çalar.")
         sound_hint.setObjectName("HintLabel")
         sound_hint.setWordWrap(True)
         layout.addWidget(sound_hint)
@@ -675,19 +777,36 @@ class SettingsWindow(QWidget):
         self.mention_border_sides_combo.setEnabled(border_on)
 
         sound_on = on and self.mention_sound_checkbox.isChecked()
-        self.mention_sound_input.setEnabled(sound_on)
+        self.mention_sound_combo.setEnabled(sound_on)
+        self.mention_sound_input.setEnabled(sound_on and self._sound_combo_is_custom())
         self.mention_cooldown_spin.setEnabled(sound_on)
 
     def _on_mention_style_changed(self, *_):
         self._sync_mention_widgets()
         self._emit_settings_changed()
 
+    def _sound_combo_is_custom(self) -> bool:
+        return self.mention_sound_combo.currentData() == "__custom__"
+
+    def _on_sound_combo_changed(self, _index):
+        data = self.mention_sound_combo.currentData()
+        if data != "__custom__":
+            self.mention_sound_input.setText(data)
+        self._sync_mention_widgets()
+        self._emit_settings_changed()
+
     def _pick_sound_file(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Bildirim Sesi Seç", self.mention_sound_input.text(),
-            "WAV ses dosyaları (*.wav)")
+            "Ses dosyaları (*.wav *.mp3)")
         if path:
             self.mention_sound_input.setText(path)
+            custom_index = self.mention_sound_combo.findData("__custom__")
+            if custom_index >= 0:
+                self.mention_sound_combo.blockSignals(True)
+                self.mention_sound_combo.setCurrentIndex(custom_index)
+                self.mention_sound_combo.blockSignals(False)
+            self._sync_mention_widgets()
             self._emit_settings_changed()
 
     def _test_sound(self):
@@ -716,6 +835,16 @@ class SettingsWindow(QWidget):
         form.addRow("Engellenen Kullanıcılar:", self.blocked_users_input)
 
         layout.addLayout(form)
+
+        self.block_emotes_checkbox = QCheckBox("Emote'leri Engelle")
+        self.block_emotes_checkbox.setChecked(self.settings.get("block_emotes", False))
+        self.block_emotes_checkbox.toggled.connect(self._emit_settings_changed)
+        layout.addWidget(self.block_emotes_checkbox)
+
+        self.block_emojis_checkbox = QCheckBox("Emojileri Engelle")
+        self.block_emojis_checkbox.setChecked(self.settings.get("block_emojis", False))
+        self.block_emojis_checkbox.toggled.connect(self._emit_settings_changed)
+        layout.addWidget(self.block_emojis_checkbox)
 
         self.hide_bot_messages_checkbox = QCheckBox("Bot Mesajlarını Gizle")
         self.hide_bot_messages_checkbox.setChecked(self.settings.get("hide_bot_messages", False))
@@ -753,6 +882,63 @@ class SettingsWindow(QWidget):
         self.hide_notifications_checkbox.setChecked(self.settings.get("hide_notifications", False))
         self.hide_notifications_checkbox.toggled.connect(self._emit_settings_changed)
         layout.addWidget(self.hide_notifications_checkbox)
+
+        self.delete_removed_checkbox = QCheckBox("Sohbetten Silinen Mesajları Uygulamadan da Sil")
+        self.delete_removed_checkbox.setChecked(self.settings.get("delete_removed_messages", True))
+        self.delete_removed_checkbox.toggled.connect(self._emit_settings_changed)
+        layout.addWidget(self.delete_removed_checkbox)
+
+        delete_hint = QLabel("Kapatılırsa moderatör/yayıncı bir mesajı silse ya da "
+                              "kullanıcıyı susturup/banlasa bile o mesaj süresi dolana "
+                              "kadar overlay'de kalmaya devam eder.")
+        delete_hint.setObjectName("HintLabel")
+        delete_hint.setWordWrap(True)
+        layout.addWidget(delete_hint)
+
+        layout.addStretch()
+        return tab
+
+    # ---- sekme: etkinlikler ----------------------------------------------
+    def _build_events_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        intro = QLabel("Kick'in sohbet dışı etkinliklerini (abonelik, hediye, "
+                        "kicks, ban vb.) overlay'de kısa bir bildirim satırı "
+                        "olarak göster. Her biri ayrı açılıp kapatılabilir.")
+        intro.setObjectName("HintLabel")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self.show_event_subscription_checkbox = QCheckBox("Abonelik Bildirimleri")
+        self.show_event_subscription_checkbox.setChecked(self.settings.get("show_event_subscription", True))
+        self.show_event_subscription_checkbox.toggled.connect(self._emit_settings_changed)
+        layout.addWidget(self.show_event_subscription_checkbox)
+
+        self.show_event_gifted_subs_checkbox = QCheckBox("Hediye Abonelik Bildirimleri")
+        self.show_event_gifted_subs_checkbox.setChecked(self.settings.get("show_event_gifted_subs", True))
+        self.show_event_gifted_subs_checkbox.toggled.connect(self._emit_settings_changed)
+        layout.addWidget(self.show_event_gifted_subs_checkbox)
+
+        self.show_event_kicks_checkbox = QCheckBox("Kicks (Bağış) Bildirimleri")
+        self.show_event_kicks_checkbox.setChecked(self.settings.get("show_event_kicks", True))
+        self.show_event_kicks_checkbox.toggled.connect(self._emit_settings_changed)
+        layout.addWidget(self.show_event_kicks_checkbox)
+
+        self.show_event_ban_checkbox = QCheckBox("Ban Bildirimleri")
+        self.show_event_ban_checkbox.setChecked(self.settings.get("show_event_ban", True))
+        self.show_event_ban_checkbox.toggled.connect(self._emit_settings_changed)
+        layout.addWidget(self.show_event_ban_checkbox)
+
+        self.show_event_unban_checkbox = QCheckBox("Ban Kaldırma Bildirimleri")
+        self.show_event_unban_checkbox.setChecked(self.settings.get("show_event_unban", True))
+        self.show_event_unban_checkbox.toggled.connect(self._emit_settings_changed)
+        layout.addWidget(self.show_event_unban_checkbox)
+
+        self.show_event_timeout_checkbox = QCheckBox("Timeout (Susturma) Bildirimleri")
+        self.show_event_timeout_checkbox.setChecked(self.settings.get("show_event_timeout", True))
+        self.show_event_timeout_checkbox.toggled.connect(self._emit_settings_changed)
+        layout.addWidget(self.show_event_timeout_checkbox)
 
         layout.addStretch()
         return tab
@@ -840,6 +1026,8 @@ class SettingsWindow(QWidget):
         self.settings["blocked_users"] = [
             tr_fold(u.strip()) for u in blocked_raw.split(",") if u.strip()
         ]
+        self.settings["block_emotes"] = self.block_emotes_checkbox.isChecked()
+        self.settings["block_emojis"] = self.block_emojis_checkbox.isChecked()
         self.settings["hide_bot_messages"] = self.hide_bot_messages_checkbox.isChecked()
         bot_users_raw = self.bot_users_input.text()
         self.settings["bot_users"] = [
@@ -848,6 +1036,14 @@ class SettingsWindow(QWidget):
         self.settings["hide_bot_commands"] = self.hide_bot_commands_checkbox.isChecked()
         self.settings["bot_command_prefix"] = self.bot_prefix_input.text().strip() or "!"
         self.settings["hide_notifications"] = self.hide_notifications_checkbox.isChecked()
+        self.settings["delete_removed_messages"] = self.delete_removed_checkbox.isChecked()
+
+        self.settings["show_event_subscription"] = self.show_event_subscription_checkbox.isChecked()
+        self.settings["show_event_gifted_subs"] = self.show_event_gifted_subs_checkbox.isChecked()
+        self.settings["show_event_kicks"] = self.show_event_kicks_checkbox.isChecked()
+        self.settings["show_event_ban"] = self.show_event_ban_checkbox.isChecked()
+        self.settings["show_event_unban"] = self.show_event_unban_checkbox.isChecked()
+        self.settings["show_event_timeout"] = self.show_event_timeout_checkbox.isChecked()
 
         self.settings["debug_logs"] = self.debug_logs_checkbox.isChecked()
 

@@ -1,6 +1,4 @@
-import base64
-
-from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, Qt
+from PyQt6.QtCore import QByteArray, QRectF, Qt
 from PyQt6.QtGui import QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 
@@ -247,8 +245,16 @@ def role_color(badges, default: str | None = None) -> str | None:
 _cache: dict = {}
 
 
-def get_badge_icon_data_uri(badge_key: str, size: int = 18) -> str | None:
-    cache_key = (badge_key, size)
+def get_badge_icon_pixmap(badge_key: str, size: int = 18, dpr: float = 1.0) -> QPixmap | None:
+    """Rozet SVG'sini QPixmap olarak dondurur.
+
+    HiDPI ekranlarda (%125/%150/%200 Windows olcekleme) mantiksal boyutta
+    (size) rasterize edilen bir gorsel bulanik/dusuk cozunurluklu gorunur;
+    bu yuzden fiziksel piksel sayisi dpr kadar fazla tutulup pixmap'e
+    setDevicePixelRatio ile isaretleniyor. Antialiasing da acilmazsa SVG
+    egrileri kucuk boyutta pikselli/"dusuk cozunurluklu" gorunuyordu.
+    """
+    cache_key = (badge_key, size, round(dpr, 2))
     if cache_key in _cache:
         return _cache[cache_key]
 
@@ -257,17 +263,44 @@ def get_badge_icon_data_uri(badge_key: str, size: int = 18) -> str | None:
         _cache[cache_key] = None
         return None
 
+    physical = max(1, round(size * dpr))
     renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
-    pixmap = QPixmap(size, size)
+    pixmap = QPixmap(physical, physical)
+    pixmap.setDevicePixelRatio(dpr)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
-    renderer.render(painter)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    # pixmap.setDevicePixelRatio(dpr) sonrasi bu QPainter MANTIKSAL (size x size,
+    # orn. 18x18) koordinatta calisiyor - fiziksel (physical, orn. 27x27) tuval
+    # sadece painter'in arkasindaki gercek piksel sayisi. Hedef dikdortgene
+    # yanlislikla "physical" verilirse painter'in gercek mantiksal sinirini
+    # (size) asip taskan kisim kirpiliyordu (rozetler "kesilmis" gorunuyordu).
+    # Doğrusu: render() hedefi de PAINTER'IN gordugu birimle (size) verilmeli.
+    renderer.render(painter, QRectF(0, 0, size, size))
     painter.end()
 
-    buf = QBuffer()
-    buf.open(QIODevice.OpenModeFlag.WriteOnly)
-    pixmap.save(buf, "PNG")
-    b64 = base64.b64encode(bytes(buf.data())).decode("ascii")
-    uri = f"data:image/png;base64,{b64}"
-    _cache[cache_key] = uri
-    return uri
+    _cache[cache_key] = pixmap
+    return pixmap
+
+
+def load_scaled_pixmap(path: str, width: int, height: int, dpr: float = 1.0) -> QPixmap | None:
+    """Bir gorsel dosyasini (rozet/emote PNG'si) HiDPI ekranlarda da net
+    gorunecek sekilde yumusak (smooth) olceklemeyle yukler.
+
+    width/height zaten dogru en-boy oraniyla hesaplanmis hedef mantiksal
+    boyuttur (bkz. emote_render_info); burada sadece fiziksel piksele
+    (dpr kat) olceklenip pixmap'e isaretlenir.
+    """
+    source = QPixmap(path)
+    if source.isNull():
+        return None
+    physical_w = max(1, round(width * dpr))
+    physical_h = max(1, round(height * dpr))
+    scaled = source.scaled(
+        physical_w, physical_h,
+        Qt.AspectRatioMode.IgnoreAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    scaled.setDevicePixelRatio(dpr)
+    return scaled
