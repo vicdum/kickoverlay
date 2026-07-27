@@ -1,5 +1,4 @@
 import ctypes
-from ctypes import wintypes
 
 from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QLabel, QScrollArea, QVBoxLayout, QWidget
@@ -21,19 +20,6 @@ SWP_NOMOVE = 0x0002
 SWP_NOSIZE = 0x0001
 SWP_NOACTIVATE = 0x0010
 TOPMOST_REASSERT_MS = 250
-
-# EVENT_SYSTEM_FOREGROUND: bir oyun/pencere on plana her gectiginde (alt-tab,
-# oyun ici pencere degisimi, vb.) aninda HWND_TOPMOST'u yeniden dayatmak icin.
-# Sadece 250ms'lik polling'e guvenmek yerine bu, oyunun topmost'u caldigi
-# aninda (bir sonraki timer tick'ini beklemeden) tepki vermemizi saglar.
-EVENT_SYSTEM_FOREGROUND = 0x0003
-WINEVENT_OUTOFCONTEXT = 0x0000
-WINEVENT_SKIPOWNPROCESS = 0x0002
-WIN_EVENT_PROC = ctypes.WINFUNCTYPE(
-    None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND,
-    wintypes.LONG, wintypes.LONG, wintypes.DWORD, wintypes.DWORD,
-)
-
 MAX_MESSAGES = 60
 RESIZE_MARGIN = 18
 MIN_WIDTH = 220
@@ -104,15 +90,10 @@ class OverlayWindow(QWidget):
         # Tam ekran oyunlar (Project Zomboid, CoH2 vb.) kendi pencerelerini
         # topmost yapip overlay'i arkada birakabiliyor; Qt topmost bayragini
         # sadece olusturmada uyguluyor. Duzenli araliklarla HWND_TOPMOST'u
-        # yeniden dayatarak overlay'i her zaman on planda tutuyoruz. Bu
-        # timer, EVENT_SYSTEM_FOREGROUND kacirilirsa diye yedek.
+        # yeniden dayatarak overlay'i her zaman on planda tutuyoruz.
         self._topmost_timer = QTimer(self)
         self._topmost_timer.timeout.connect(self._reassert_topmost)
         self._topmost_timer.start(TOPMOST_REASSERT_MS)
-
-        self._install_foreground_watch()
-        if app is not None:
-            app.aboutToQuit.connect(self._uninstall_foreground_watch)
 
     def _reassert_topmost(self):
         try:
@@ -123,31 +104,6 @@ class OverlayWindow(QWidget):
             )
         except Exception as exc:
             log.debug("topmost yeniden uygulanamadi: %s", exc)
-
-    def _install_foreground_watch(self):
-        self._win_event_hook = None
-        try:
-            # Callback referansi bir yerde tutulmali, yoksa ctypes'in ureteci
-            # GC edilir ve Windows callback'i bos bir adrese cagirmaya calisir.
-            self._win_event_proc = WIN_EVENT_PROC(self._on_foreground_changed)
-            self._win_event_hook = ctypes.windll.user32.SetWinEventHook(
-                EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
-                0, self._win_event_proc, 0, 0,
-                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
-            )
-        except Exception as exc:
-            log.debug("foreground-degisim kancasi kurulamadi: %s", exc)
-
-    def _on_foreground_changed(self, hwineventhook, event, hwnd, idobject, idchild, ideventthread, dwmseventtime):
-        self._reassert_topmost()
-
-    def _uninstall_foreground_watch(self):
-        if getattr(self, "_win_event_hook", None):
-            try:
-                ctypes.windll.user32.UnhookWinEvent(self._win_event_hook)
-            except Exception:
-                pass
-            self._win_event_hook = None
 
     def _position_resize_grip(self):
         self.resize_grip.move(self.width() - RESIZE_MARGIN, self.height() - RESIZE_MARGIN)
