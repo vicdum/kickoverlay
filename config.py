@@ -1,7 +1,7 @@
 import json
 import os
 
-APP_VERSION = "1.4.3"
+APP_VERSION = "1.4.0"
 
 APPDATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "KickOverlay")
 CONFIG_PATH = os.path.join(APPDATA_DIR, "config.json")

@@ -15,11 +15,6 @@ log = get_logger("overlay")
 GWL_EXSTYLE = -20
 WS_EX_LAYERED = 0x00080000
 WS_EX_TRANSPARENT = 0x00000020
-HWND_TOPMOST = -1
-SWP_NOMOVE = 0x0002
-SWP_NOSIZE = 0x0001
-SWP_NOACTIVATE = 0x0010
-TOPMOST_REASSERT_MS = 250
 MAX_MESSAGES = 60
 RESIZE_MARGIN = 18
 MIN_WIDTH = 220
@@ -86,24 +81,6 @@ class OverlayWindow(QWidget):
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
-
-        # Tam ekran oyunlar (Project Zomboid, CoH2 vb.) kendi pencerelerini
-        # topmost yapip overlay'i arkada birakabiliyor; Qt topmost bayragini
-        # sadece olusturmada uyguluyor. Duzenli araliklarla HWND_TOPMOST'u
-        # yeniden dayatarak overlay'i her zaman on planda tutuyoruz.
-        self._topmost_timer = QTimer(self)
-        self._topmost_timer.timeout.connect(self._reassert_topmost)
-        self._topmost_timer.start(TOPMOST_REASSERT_MS)
-
-    def _reassert_topmost(self):
-        try:
-            hwnd = int(self.winId())
-            ctypes.windll.user32.SetWindowPos(
-                hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            )
-        except Exception as exc:
-            log.debug("topmost yeniden uygulanamadi: %s", exc)
 
     def _position_resize_grip(self):
         self.resize_grip.move(self.width() - RESIZE_MARGIN, self.height() - RESIZE_MARGIN)
