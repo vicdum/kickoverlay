@@ -1,4 +1,6 @@
 import json
+import time
+import uuid
 
 import requests
 import websocket
@@ -10,13 +12,20 @@ from logger import get_logger
 
 log = get_logger("kick")
 
-# Kick'in tarayicidan kullandigi genel Pusher app key / cluster.
-PUSHER_APP_KEY = "32cbd69e4b950bf97679"
-PUSHER_CLUSTER = "us2"
+# Kick sohbet altyapisini sabit bir Pusher app key'inden cikardi: artik
+# istemci once "realtime descriptor"u soruyor, yanitta hangi saglayicinin
+# (Centrifugo ya da Pusher) ve hangi adresin/anahtarin kullanilacagi
+# geliyor. Eski sabit anahtar (32cbd69e...) hicbir cluster'da gecerli
+# degil ("App key ... not in this cluster"), o yuzden baglanti bilgisi
+# her denemede API'den aliniyor.
+REALTIME_API_URL = "https://web.kick.com/api/v1/realtime"
 PUSHER_WS_URL = (
-    f"wss://ws-{PUSHER_CLUSTER}.pusher.com/app/{PUSHER_APP_KEY}"
+    "wss://ws-{cluster}.pusher.com/app/{app_key}"
     "?protocol=7&client=py&version=7.6.0&flash=false"
 )
+# Centrifugo baglanti token'i ~45 dk gecerli; suresi dolmadan bu kadar
+# saniye once yenilenir (yenilenmezse sunucu baglantiyi kapatiyor).
+TOKEN_REFRESH_MARGIN = 120
 
 KICK_API_URL = "https://kick.com/api/v1/channels/{username}"
 
@@ -40,6 +49,8 @@ HEADERS = {
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json",
+    "Referer": "https://kick.com/",
+    "x-app-platform": "web",
 }
 
 
@@ -68,6 +79,10 @@ class KickChatWorker(QThread):
         self._user_id = None
         self._connected_ok = False
         self._consecutive_failures = 0
+        # Kick'in anonim ziyaretciye verdigi "ephemeral" kimligin karsiligi
+        self._client_id = str(uuid.uuid4())
+        self._next_cmd_id = 1
+        self._token_deadline = None
 
     def stop(self):
         log.info("worker durduruluyor (kanal=%s)", self.username)
@@ -197,7 +212,55 @@ class KickChatWorker(QThread):
         else:
             log.debug("baglanti koptu, %s sn sonra yeniden denenecek (deneme %s)", delay, attempt)
 
-    def _subscribe_all(self, ws):
+    def _fetch_realtime_app(self) -> dict:
+        """Sohbet icin hangi saglayiciya/adrese baglanilacagini Kick'ten alir."""
+        body = {
+            "client": {"id": self._client_id, "type": "web"},
+            "capabilities": {
+                "accepted_providers": [{"provider": "centrifugo"}, {"provider": "pusher"}],
+            },
+        }
+        url = f"{REALTIME_API_URL}/channels/{self._channel_id}/chat/connection"
+        try:
+            resp = requests.post(url, json=body, headers=HEADERS, timeout=(5, 10))
+            resp.raise_for_status()
+            data = resp.json().get("data") or {}
+        except (requests.exceptions.RequestException, ValueError) as exc:
+            raise ValueError(f"Sohbet baglanti bilgisi alinamadi: {exc}") from exc
+
+        connections = data.get("connections") or []
+        if data.get("mode") == "websocket":
+            for conn in connections:
+                provider = conn.get("provider")
+                creds = conn.get("credentials") or {}
+                if provider == "centrifugo" and creds.get("url"):
+                    return {"provider": "centrifugo", "url": creds["url"]}
+                if provider == "pusher" and creds.get("app_key") and creds.get("cluster"):
+                    return {
+                        "provider": "pusher",
+                        "url": PUSHER_WS_URL.format(cluster=creds["cluster"],
+                                                    app_key=creds["app_key"]),
+                    }
+        raise ValueError(
+            "Kick desteklenmeyen bir sohbet baglantisi dondurdu "
+            f"(mode={data.get('mode')!r}, saglayicilar="
+            f"{[c.get('provider') for c in connections]})"
+        )
+
+    def _fetch_centrifugo_token(self) -> str:
+        try:
+            resp = requests.post(f"{REALTIME_API_URL}/auth/connection",
+                                 json={"client_id": self._client_id},
+                                 headers=HEADERS, timeout=(5, 10))
+            resp.raise_for_status()
+            token = (resp.json().get("data") or {}).get("token")
+        except (requests.exceptions.RequestException, ValueError) as exc:
+            raise ValueError(f"Sohbet baglanti token'i alinamadi: {exc}") from exc
+        if not token:
+            raise ValueError("Sohbet baglanti token'i bos dondu.")
+        return token
+
+    def _channel_names(self) -> list:
         """Sohbet olaylari (mesaj/silme/ban) chatroom kanalinda gelir, ama
         abonelik/hediye/kicks gibi yayinci-seviyesi olaylar Kick'te tutarsiz
         sekilde chatroom'un eski takma adlarinda ya da yayincinin channel_id/
@@ -213,143 +276,229 @@ class KickChatWorker(QThread):
             f"channel_{self._channel_id}",
             f"channel.{self._user_id}",
         ]
-        seen = set()
+        names = []
         for name in candidates:
-            if "None" in name or name in seen:
+            if "None" in name or name in names:
                 continue
-            seen.add(name)
-            ws.send(json.dumps({"event": "pusher:subscribe", "data": {"channel": name}}))
-        log.debug("pusher kanallarina abone olundu: %s", sorted(seen))
+            names.append(name)
+        return names
+
+    def _mark_connected(self):
+        self._connected_ok = True
+        self.connected.emit()
+        self.status_changed.emit("Baglandi, sohbet dinleniyor.")
+
+    def _cmd_id(self) -> int:
+        self._next_cmd_id += 1
+        return self._next_cmd_id
+
+    # ---- Pusher protokolu -------------------------------------------------
+
+    def _on_pusher_frame(self, ws, message):
+        try:
+            payload = json.loads(message)
+        except json.JSONDecodeError:
+            log.debug("cozulemeyen websocket mesaji atlandi (%s bayt)", len(message or ""))
+            return
+
+        event = payload.get("event") or ""
+        if event == "pusher:connection_established":
+            names = self._channel_names()
+            for name in names:
+                ws.send(json.dumps({"event": "pusher:subscribe", "data": {"channel": name}}))
+            log.debug("pusher kanallarina abone olundu: %s", names)
+            self._mark_connected()
+        elif event == "pusher:ping":
+            ws.send(json.dumps({"event": "pusher:pong", "data": {}}))
+        elif event == "pusher:error":
+            log.error("pusher hatasi: %s", payload.get("data"))
+        else:
+            self._handle_event(event, payload.get("data"))
+
+    # ---- Centrifugo protokolu ---------------------------------------------
+
+    def _centrifugo_connect(self, ws):
+        token = self._fetch_centrifugo_token()
+        self._next_cmd_id = 1
+        ws.send(json.dumps({"id": 1, "connect": {"token": token, "name": "js"}}))
+
+    def _set_token_deadline(self, info: dict):
+        if info.get("expires") and info.get("ttl"):
+            self._token_deadline = time.monotonic() + info["ttl"]
+        else:
+            self._token_deadline = None
+
+    def _refresh_token_if_needed(self, ws):
+        if (self._token_deadline is None
+                or time.monotonic() < self._token_deadline - TOKEN_REFRESH_MARGIN):
+            return
+        # basarisiz olursa her ping'de tekrar denenmesin diye once
+        # sifirlaniyor; sunucu sure dolunca kapatir, dis dongu yeniden baglar
+        self._token_deadline = None
+        try:
+            token = self._fetch_centrifugo_token()
+        except ValueError as exc:
+            log.warning("token yenilenemedi, baglanti suresi dolunca yeniden kurulacak: %s", exc)
+            return
+        ws.send(json.dumps({"id": self._cmd_id(), "refresh": {"token": token}}))
+        log.debug("centrifugo token yenileme istegi gonderildi")
+
+    def _on_centrifugo_frame(self, ws, message):
+        # tek websocket cercevesinde satir satir birden fazla JSON gelebilir
+        for line in (message or "").split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            if line == "{}":
+                # sunucu ping'i (25 sn'de bir); yanitlanmazsa baglanti kesilir
+                ws.send("{}")
+                self._refresh_token_if_needed(ws)
+                continue
+            try:
+                reply = json.loads(line)
+            except json.JSONDecodeError:
+                log.debug("cozulemeyen websocket mesaji atlandi (%s bayt)", len(line))
+                continue
+
+            if "push" in reply:
+                push = reply["push"] or {}
+                if "pub" in push:
+                    envelope = (push["pub"] or {}).get("data") or {}
+                    if isinstance(envelope, dict):
+                        self._handle_event(envelope.get("event") or "", envelope.get("data"))
+                elif "disconnect" in push:
+                    log.warning("sunucu baglantiyi kesiyor: %s", push["disconnect"])
+                elif "unsubscribe" in push:
+                    log.warning("sunucu kanal aboneligini sonlandirdi (%s): %s",
+                                push.get("channel"), push["unsubscribe"])
+            elif "error" in reply:
+                if reply.get("id") == 1:
+                    log.error("centrifugo baglanti istegi reddedildi: %s", reply["error"])
+                    ws.close()
+                    return
+                log.warning("centrifugo istegi basarisiz (id=%s): %s",
+                            reply.get("id"), reply["error"])
+            elif "connect" in reply:
+                self._set_token_deadline(reply["connect"] or {})
+                names = self._channel_names()
+                ws.send("\n".join(
+                    json.dumps({"id": self._cmd_id(), "subscribe": {"channel": name}})
+                    for name in names
+                ))
+                log.debug("centrifugo kanallarina abone olundu: %s", names)
+                self._mark_connected()
+            elif "refresh" in reply:
+                self._set_token_deadline(reply["refresh"] or {})
+                log.debug("centrifugo token yenilendi")
+
+    # ---- Olaylar (iki saglayicida da ayni) --------------------------------
+
+    def _handle_event(self, raw_event: str, data):
+        # Kick bazi olaylari "App\Events\X" onekiyle, bazilarini ciplak
+        # "X" olarak yolluyor (gozlemlendi: SubscriptionEvent/UserBannedEvent
+        # onekli, GiftedSubscriptionsEvent/KicksGifted/RewardRedeemedEvent
+        # ciplak). Oneki atip tek koldan eslestirmek ikisini de kapsar.
+        prefix = "App\\Events\\"
+        event = raw_event[len(prefix):] if raw_event.startswith(prefix) else raw_event
+
+        # olay icerigi JSON metni olarak sarili geliyor
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                log.debug("%s icerigi cozulemedi", event)
+                return
+        if not isinstance(data, dict):
+            return
+
+        if event == "ChatMessageEvent":
+            try:
+                precache_emotes(data.get("content", ""))
+            except Exception as exc:
+                log.warning("emote onbellege alinamadi: %s", exc)
+            self.message_received.emit(data)
+
+        elif event == "MessageDeletedEvent":
+            message_id = (data.get("message") or {}).get("id")
+            if message_id:
+                log.debug("mesaj silindi (id=%s)", message_id)
+                self.message_deleted.emit(message_id)
+
+        elif event == "UserBannedEvent":
+            username = (data.get("user") or {}).get("username")
+            if username:
+                info = {
+                    "username": username,
+                    "permanent": bool(data.get("permanent")),
+                    "duration": data.get("duration"),
+                    "expires_at": data.get("expires_at"),
+                    "banned_by": (data.get("banned_by") or {}).get("username"),
+                }
+                log.debug("kullanici banlandi/susturuldu: %s (kalici=%s)",
+                          username, info["permanent"])
+                self.user_banned.emit(info)
+
+        elif event == "UserUnbannedEvent":
+            username = (data.get("user") or {}).get("username")
+            if username:
+                info = {
+                    "username": username,
+                    "unbanned_by": (data.get("unbanned_by") or {}).get("username"),
+                }
+                log.debug("kullanicinin bani kaldirildi: %s", username)
+                self.user_unbanned.emit(info)
+
+        elif event == "SubscriptionEvent":
+            username = data.get("username")
+            if username:
+                info = {"username": username, "months": data.get("months") or 1}
+                log.debug("abonelik: %s (%s ay)", username, info["months"])
+                self.subscription_event.emit(info)
+
+        elif event == "GiftedSubscriptionsEvent":
+            gifted = data.get("gifted_usernames") or []
+            info = {
+                "gifter_username": data.get("gifter_username") or "Anonim",
+                "gifted_usernames": gifted,
+                "gifter_total": data.get("gifter_total") or len(gifted),
+            }
+            log.debug("hediye abonelik: %s -> %s kisi",
+                      info["gifter_username"], len(gifted))
+            self.gifted_subs_event.emit(info)
+
+        elif event == "KicksGifted":
+            sender = data.get("sender") or {}
+            gift = data.get("gift") or {}
+            info = {
+                "sender_username": sender.get("username") or "???",
+                "gift_name": gift.get("name") or "Kicks",
+                "amount": gift.get("amount") or 0,
+            }
+            log.debug("kicks hediye: %s x%s (%s)",
+                      info["sender_username"], info["amount"], info["gift_name"])
+            self.kicks_gifted_event.emit(info)
 
     def _run_websocket(self):
+        app = self._fetch_realtime_app()
+        centrifugo = app["provider"] == "centrifugo"
+        self._token_deadline = None
+        log.info("sohbet saglayicisi=%s url=%s", app["provider"], app["url"].split("?")[0])
+
         def on_open(ws):
             log.info("websocket acildi")
+            if centrifugo:
+                try:
+                    self._centrifugo_connect(ws)
+                except Exception as exc:
+                    log.error("centrifugo baglanti istegi gonderilemedi: %s", exc)
+                    self.error_occurred.emit(str(exc))
+                    ws.close()
 
         def on_message(ws, message):
-            try:
-                payload = json.loads(message)
-            except json.JSONDecodeError:
-                log.debug("cozulemeyen websocket mesaji atlandi (%s bayt)", len(message or ""))
-                return
-
-            raw_event = payload.get("event") or ""
-            # Kick bazi olaylari "App\Events\X" onekiyle, bazilarini ciplak
-            # "X" olarak yolluyor (gozlemlendi: SubscriptionEvent/UserBannedEvent
-            # onekli, GiftedSubscriptionsEvent/KicksGifted/RewardRedeemedEvent
-            # ciplak). Oneki atip tek koldan eslestirmek ikisini de kapsar.
-            prefix = "App\\Events\\"
-            event = raw_event[len(prefix):] if raw_event.startswith(prefix) else raw_event
-
-            if event == "pusher:connection_established":
-                self._subscribe_all(ws)
-                self._connected_ok = True
-                self.connected.emit()
-                self.status_changed.emit("Baglandi, sohbet dinleniyor.")
-
-            elif event == "pusher:ping":
-                ws.send(json.dumps({"event": "pusher:pong", "data": {}}))
-
-            elif event == "ChatMessageEvent":
-                try:
-                    data = json.loads(payload.get("data", "{}"))
-                except json.JSONDecodeError:
-                    log.debug("ChatMessageEvent icerigi cozulemedi")
-                    return
-                try:
-                    precache_emotes(data.get("content", ""))
-                except Exception as exc:
-                    log.warning("emote onbellege alinamadi: %s", exc)
-                self.message_received.emit(data)
-
-            elif event == "MessageDeletedEvent":
-                try:
-                    data = json.loads(payload.get("data", "{}"))
-                except json.JSONDecodeError:
-                    log.debug("MessageDeletedEvent icerigi cozulemedi")
-                    return
-                message_id = (data.get("message") or {}).get("id")
-                if message_id:
-                    log.debug("mesaj silindi (id=%s)", message_id)
-                    self.message_deleted.emit(message_id)
-
-            elif event == "UserBannedEvent":
-                try:
-                    data = json.loads(payload.get("data", "{}"))
-                except json.JSONDecodeError:
-                    log.debug("UserBannedEvent icerigi cozulemedi")
-                    return
-                username = (data.get("user") or {}).get("username")
-                if username:
-                    info = {
-                        "username": username,
-                        "permanent": bool(data.get("permanent")),
-                        "duration": data.get("duration"),
-                        "expires_at": data.get("expires_at"),
-                        "banned_by": (data.get("banned_by") or {}).get("username"),
-                    }
-                    log.debug("kullanici banlandi/susturuldu: %s (kalici=%s)",
-                              username, info["permanent"])
-                    self.user_banned.emit(info)
-
-            elif event == "UserUnbannedEvent":
-                try:
-                    data = json.loads(payload.get("data", "{}"))
-                except json.JSONDecodeError:
-                    log.debug("UserUnbannedEvent icerigi cozulemedi")
-                    return
-                username = (data.get("user") or {}).get("username")
-                if username:
-                    info = {
-                        "username": username,
-                        "unbanned_by": (data.get("unbanned_by") or {}).get("username"),
-                    }
-                    log.debug("kullanicinin bani kaldirildi: %s", username)
-                    self.user_unbanned.emit(info)
-
-            elif event == "SubscriptionEvent":
-                try:
-                    data = json.loads(payload.get("data", "{}"))
-                except json.JSONDecodeError:
-                    log.debug("SubscriptionEvent icerigi cozulemedi")
-                    return
-                username = data.get("username")
-                if username:
-                    info = {"username": username, "months": data.get("months") or 1}
-                    log.debug("abonelik: %s (%s ay)", username, info["months"])
-                    self.subscription_event.emit(info)
-
-            elif event == "GiftedSubscriptionsEvent":
-                try:
-                    data = json.loads(payload.get("data", "{}"))
-                except json.JSONDecodeError:
-                    log.debug("GiftedSubscriptionsEvent icerigi cozulemedi")
-                    return
-                gifted = data.get("gifted_usernames") or []
-                info = {
-                    "gifter_username": data.get("gifter_username") or "Anonim",
-                    "gifted_usernames": gifted,
-                    "gifter_total": data.get("gifter_total") or len(gifted),
-                }
-                log.debug("hediye abonelik: %s -> %s kisi",
-                          info["gifter_username"], len(gifted))
-                self.gifted_subs_event.emit(info)
-
-            elif event == "KicksGifted":
-                try:
-                    data = json.loads(payload.get("data", "{}"))
-                except json.JSONDecodeError:
-                    log.debug("KicksGifted icerigi cozulemedi")
-                    return
-                sender = data.get("sender") or {}
-                gift = data.get("gift") or {}
-                info = {
-                    "sender_username": sender.get("username") or "???",
-                    "gift_name": gift.get("name") or "Kicks",
-                    "amount": gift.get("amount") or 0,
-                }
-                log.debug("kicks hediye: %s x%s (%s)",
-                          info["sender_username"], info["amount"], info["gift_name"])
-                self.kicks_gifted_event.emit(info)
+            if centrifugo:
+                self._on_centrifugo_frame(ws, message)
+            else:
+                self._on_pusher_frame(ws, message)
 
         def on_error(ws, error):
             log.error("websocket hatasi: %s: %s", type(error).__name__, error)
@@ -360,7 +509,8 @@ class KickChatWorker(QThread):
             self.disconnected.emit()
 
         self._ws = websocket.WebSocketApp(
-            PUSHER_WS_URL,
+            app["url"],
+            header=["Origin: https://kick.com"],
             on_open=on_open,
             on_message=on_message,
             on_error=on_error,
