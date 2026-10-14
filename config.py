@@ -1,7 +1,7 @@
 import json
 import os
 
-APP_VERSION = "1.4.4"
+APP_VERSION = "1.4.5"
 
 APPDATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "KickOverlay")
 CONFIG_PATH = os.path.join(APPDATA_DIR, "config.json")
@@ -60,7 +60,8 @@ DEFAULTS = {
     "block_emojis": False,
     "delete_removed_messages": True,
     "hide_bot_messages": False,
-    "bot_users": ["botrix", "kicklet", "streamelements", "fossabot", "wizebot", "moobot"],
+    "bot_users": ["botrix", "kicklet", "streamelements", "fossabot", "wizebot", "moobot",
+                  "@modbro"],
     "hide_bot_commands": False,
     "bot_command_prefix": "!",
     "hide_notifications": False,
@@ -85,12 +86,39 @@ def _log():
     return get_logger("config")
 
 
+# bot_users varsayilanlarindan hangilerinin kullanicinin listesine
+# eklendigi (bkz. _merge_new_default_bots)
+DEFAULTS["bot_users_defaults_seen"] = list(DEFAULTS["bot_users"])
+
+# bot_users_defaults_seen alani eklenmeden onceki varsayilan bot listesi
+_LEGACY_DEFAULT_BOTS = ["botrix", "kicklet", "streamelements", "fossabot", "wizebot", "moobot"]
+
+
+def _merge_new_default_bots(cfg: dict, saved: dict):
+    """Kayitli config'te bot_users varsayilanin yerine gectigi icin sonradan
+    varsayilan listeye eklenen botlar mevcut kullanicilara hic ulasmiyordu.
+    Her yeni varsayilan bot bir kez eklenir; kullanici sonra silerse geri
+    gelmez (bot_users_defaults_seen'de kayitli kalir)."""
+    if "bot_users" not in saved:
+        cfg["bot_users_defaults_seen"] = list(DEFAULTS["bot_users"])
+        return
+    seen = saved.get("bot_users_defaults_seen") or _LEGACY_DEFAULT_BOTS
+    bots = list(cfg.get("bot_users") or [])
+    present = {b.strip().lower() for b in bots if isinstance(b, str)}
+    for bot in DEFAULTS["bot_users"]:
+        if bot not in seen and bot not in present:
+            bots.append(bot)
+    cfg["bot_users"] = bots
+    cfg["bot_users_defaults_seen"] = list(DEFAULTS["bot_users"])
+
+
 def load_config() -> dict:
     cfg = DEFAULTS.copy()
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             saved = json.load(f)
         cfg.update(saved)
+        _merge_new_default_bots(cfg, saved)
     except FileNotFoundError:
         pass
     except json.JSONDecodeError as exc:

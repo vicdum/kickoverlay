@@ -61,6 +61,14 @@ class OverlayWindow(QWidget):
         self.scroll.viewport().setStyleSheet("background: transparent;")
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Yeni mesaj eklenir eklenmez kaydirmak yetmiyor: ChatMessageWidget
+        # yuksekligini ancak layout ona genislik verdikten sonra (resizeEvent
+        # icinde) belirliyor, kap sonradan uzuyor ve son mesaj gorunur
+        # alanin altinda kalip bir sonraki mesaj gelene kadar gorunmuyordu
+        # ("mesajlar gecikmeli geliyor"). Aralik her degistiginde en alta
+        # inmek bunu kapsar; overlay'de elle kaydirma olmadigi icin guvenli.
+        self.scroll.verticalScrollBar().rangeChanged.connect(
+            lambda _min, max_value: self.scroll.verticalScrollBar().setValue(max_value))
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
