@@ -26,6 +26,9 @@ PUSHER_WS_URL = (
 # Centrifugo baglanti token'i ~45 dk gecerli; suresi dolmadan bu kadar
 # saniye once yenilenir (yenilenmezse sunucu baglantiyi kapatiyor).
 TOKEN_REFRESH_MARGIN = 120
+# Ayni abonelik hem SubscriptionEvent hem "celebration" mesaji olarak
+# gelebiliyor; bu sure icinde ayni kullanici icin ikinci bildirim atlanir.
+SUB_DEDUP_SECONDS = 60
 
 KICK_API_URL = "https://kick.com/api/v1/channels/{username}"
 
@@ -83,6 +86,11 @@ class KickChatWorker(QThread):
         self._client_id = str(uuid.uuid4())
         self._next_cmd_id = 1
         self._token_deadline = None
+        # Buyuk hediye abonelikler birden fazla GiftedSubscriptionsEvent
+        # parcasi (chunk_details) olarak geliyor; bildirim sadece ilk
+        # parcada gosterilir (Kick'in kendi sohbeti de boyle yapiyor).
+        self._gift_correlations = set()
+        self._recent_subs = {}
 
     def stop(self):
         log.info("worker durduruluyor (kanal=%s)", self.username)
@@ -412,6 +420,15 @@ class KickChatWorker(QThread):
             return
 
         if event == "ChatMessageEvent":
+            # Yeniden abonelikler (resub) artik ayri SubscriptionEvent olarak
+            # degil, "celebration" tipinde bir sohbet mesaji olarak geliyor
+            # (gozlemlendi: celebration.type="subscription_renewed",
+            # total_months=11). Mesaj metni yine sohbette gosterilir.
+            if data.get("type") == "celebration":
+                celebration = (data.get("metadata") or {}).get("celebration") or {}
+                username = (data.get("sender") or {}).get("username")
+                if username and str(celebration.get("type") or "").startswith("subscription"):
+                    self._emit_subscription(username, celebration.get("total_months") or 1)
             try:
                 precache_emotes(data.get("content", ""))
             except Exception as exc:
@@ -444,6 +461,8 @@ class KickChatWorker(QThread):
                 info = {
                     "username": username,
                     "unbanned_by": (data.get("unbanned_by") or {}).get("username"),
+                    # permanent=false: kaldirilan bir ban degil, timeout
+                    "permanent": data.get("permanent", True) is not False,
                 }
                 log.debug("kullanicinin bani kaldirildi: %s", username)
                 self.user_unbanned.emit(info)
@@ -451,19 +470,32 @@ class KickChatWorker(QThread):
         elif event == "SubscriptionEvent":
             username = data.get("username")
             if username:
-                info = {"username": username, "months": data.get("months") or 1}
-                log.debug("abonelik: %s (%s ay)", username, info["months"])
-                self.subscription_event.emit(info)
+                self._emit_subscription(username, data.get("months") or 1)
 
         elif event == "GiftedSubscriptionsEvent":
             gifted = data.get("gifted_usernames") or []
+            chunk = data.get("chunk_details") or {}
+            correlation = chunk.get("correlation_id")
+            if correlation:
+                is_last = chunk.get("chunk_index") == (chunk.get("total_chunks") or 0) - 1
+                if correlation in self._gift_correlations:
+                    if is_last:
+                        self._gift_correlations.discard(correlation)
+                    log.debug("hediye abonelik devam parcasi atlandi (%s)", correlation)
+                    return
+                if not is_last:
+                    self._gift_correlations.add(correlation)
+            # gifter_total gonderenin bu kanaldaki TOPLAM hediyesi; bu
+            # hediyenin adedi gifted_total (eskiden yanlislikla toplam
+            # gosteriliyordu)
             info = {
                 "gifter_username": data.get("gifter_username") or "Anonim",
                 "gifted_usernames": gifted,
-                "gifter_total": data.get("gifter_total") or len(gifted),
+                "gifted_total": data.get("gifted_total") or len(gifted),
+                "gifter_total": data.get("gifter_total"),
             }
-            log.debug("hediye abonelik: %s -> %s kisi",
-                      info["gifter_username"], len(gifted))
+            log.debug("hediye abonelik: %s -> %s abonelik (toplam %s)",
+                      info["gifter_username"], info["gifted_total"], info["gifter_total"])
             self.gifted_subs_event.emit(info)
 
         elif event == "KicksGifted":
@@ -477,6 +509,18 @@ class KickChatWorker(QThread):
             log.debug("kicks hediye: %s x%s (%s)",
                       info["sender_username"], info["amount"], info["gift_name"])
             self.kicks_gifted_event.emit(info)
+
+    def _emit_subscription(self, username: str, months: int):
+        now = time.monotonic()
+        key = username.lower()
+        if now - self._recent_subs.get(key, -SUB_DEDUP_SECONDS) < SUB_DEDUP_SECONDS:
+            log.debug("abonelik bildirimi tekrari atlandi: %s", username)
+            return
+        self._recent_subs = {k: t for k, t in self._recent_subs.items()
+                             if now - t < SUB_DEDUP_SECONDS}
+        self._recent_subs[key] = now
+        log.debug("abonelik: %s (%s ay)", username, months)
+        self.subscription_event.emit({"username": username, "months": months})
 
     def _run_websocket(self):
         app = self._fetch_realtime_app()

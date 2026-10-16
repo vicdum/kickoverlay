@@ -246,13 +246,15 @@ class OverlayWindow(QWidget):
 
     # ---- sohbet mesajlari --------------------------------------------
     def add_message(self, username: str, content: str, color: str, badges: list,
-                     msg_type: str = "message", message_id: str | None = None):
+                     msg_type: str = "message", message_id: str | None = None,
+                     reply_to: dict | None = None):
         if self._is_filtered(username, content, msg_type):
             return
 
         highlighted = self._is_highlighted(username, badges)
         try:
-            widget = ChatMessageWidget(username, content, color, badges, self.settings, highlighted)
+            widget = ChatMessageWidget(username, content, color, badges, self.settings, highlighted,
+                                       reply_to=reply_to)
         except Exception as exc:
             log.error("mesaj olusturulamadi (user=%r): %s", username, exc, exc_info=True)
             return

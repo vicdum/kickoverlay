@@ -312,7 +312,16 @@ class App:
             content = data.get("content", "")
             msg_type = data.get("type", "message")
             message_id = data.get("id")
-            self.overlay.add_message(username, content, color, badges, msg_type, message_id)
+            reply_to = None
+            if msg_type == "reply":
+                metadata = data.get("metadata") or {}
+                original = metadata.get("original_message") or {}
+                reply_to = {
+                    "username": (metadata.get("original_sender") or {}).get("username") or "",
+                    "content": original.get("content") or "",
+                }
+            self.overlay.add_message(username, content, color, badges, msg_type, message_id,
+                                     reply_to)
         except Exception as exc:
             log.error("mesaj islenemedi: %s | veri=%.400r", exc, data, exc_info=True)
 
@@ -329,19 +338,27 @@ class App:
 
         if self.overlay is None:
             return
+        by = info.get("banned_by")
+        by_text = f" ({by} tarafından)" if by else ""
         if info.get("permanent"):
             if self.config.get("show_event_ban", True):
-                self.overlay.add_event_message(f"🔨 {username} kalıcı olarak banlandı.", "ban")
+                self.overlay.add_event_message(
+                    f"🔨 {username} kalıcı olarak banlandı{by_text}.", "ban")
         else:
             if self.config.get("show_event_timeout", True):
                 minutes = info.get("duration")
-                suffix = f" ({minutes} dk)" if minutes else ""
-                self.overlay.add_event_message(f"⏱ {username} susturuldu (timeout){suffix}.", "timeout")
+                length = f" {minutes} dk" if minutes else ""
+                self.overlay.add_event_message(
+                    f"⏱ {username}{length} susturuldu{by_text}.", "timeout")
 
     def _on_user_unbanned(self, info: dict):
         if self.overlay is None or not self.config.get("show_event_unban", True):
             return
-        self.overlay.add_event_message(f"✅ {info.get('username', '???')} banı kaldırıldı.", "unban")
+        by = info.get("unbanned_by")
+        by_text = f" ({by} tarafından)" if by else ""
+        what = "banı" if info.get("permanent", True) else "susturması"
+        self.overlay.add_event_message(
+            f"✅ {info.get('username', '???')} {what} kaldırıldı{by_text}.", "unban")
 
     def _on_subscription_event(self, info: dict):
         if self.overlay is None or not self.config.get("show_event_subscription", True):
@@ -358,7 +375,7 @@ class App:
         if self.overlay is None or not self.config.get("show_event_gifted_subs", True):
             return
         gifter = info.get("gifter_username") or "Anonim"
-        count = info.get("gifter_total") or len(info.get("gifted_usernames") or [])
+        count = info.get("gifted_total") or len(info.get("gifted_usernames") or [])
         self.overlay.add_event_message(f"🎁 {gifter} {count} abonelik hediye etti!", "gifted_subs")
 
     def _on_kicks_gifted_event(self, info: dict):

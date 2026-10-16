@@ -16,6 +16,8 @@ BORDER_MODES = ("none", "custom", "username", "role")
 FONT_WEIGHTS = (100, 200, 300, 400, 500, 600, 700, 800, 900)
 
 MESSAGE_V_PADDING = 6
+# reply satirinda yanit verilen mesajdan gosterilecek en fazla karakter
+REPLY_SNIPPET_CHARS = 40
 MESSAGE_H_PADDING = 10
 
 # Yaygin emoji Unicode bloklari (yazi tipi karakterleriyle karisma riski
@@ -41,6 +43,37 @@ EMOJI_RE = re.compile(
 
 def strip_emojis(text: str) -> str:
     return EMOJI_RE.sub("", text or "")
+
+
+def dim_color(hex_color: str, factor: float = 0.55) -> str:
+    """Rengi siyaha dogru koyulastirir (QTextDocument rich text'te
+    opacity desteklenmedigi icin "sonuk" metin boyle elde ediliyor)."""
+    raw = (hex_color or "#ffffff").lstrip("#")
+    if len(raw) == 3:
+        raw = "".join(c * 2 for c in raw)
+    try:
+        r, g, b = int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+    except (ValueError, IndexError):
+        r, g, b = 255, 255, 255
+    return "#{:02x}{:02x}{:02x}".format(*(int(c * factor) for c in (r, g, b)))
+
+
+def render_reply_html(reply_to: dict, text_color: str, size: int, block_emojis: bool) -> str:
+    """Yanit verilen mesaji tek satirlik, kisaltilmis ve sonuk bir ust
+    satir olarak verir. Emote'lar gorsel yerine adlariyla yazilir."""
+    snippet = EMOTE_TOKEN_RE.sub(lambda m: m.group(2) or "", reply_to.get("content") or "")
+    if block_emojis:
+        snippet = strip_emojis(snippet)
+    snippet = " ".join(snippet.split())
+    if len(snippet) > REPLY_SNIPPET_CHARS:
+        snippet = snippet[:REPLY_SNIPPET_CHARS - 1].rstrip() + "…"
+    user = reply_to.get("username") or ""
+    who = f"@{html.escape(user)}" + (": " if snippet else "") if user else ""
+    return (
+        f'<p style="margin:0 0 2px 0;color:{dim_color(text_color)};font-size:{max(9, size - 3)}px;'
+        'font-style:italic;font-weight:400;">'
+        f'↪ {who}{html.escape(snippet)}</p>'
+    )
 
 
 def hex_to_rgba(hex_color: str, alpha: int) -> str:
@@ -325,7 +358,7 @@ def render_content_html(content: str, img_size: int, mention_pattern=None,
 
 class ChatMessageWidget(QTextEdit):
     def __init__(self, username: str, content: str, sender_color: str, badges: list,
-                 settings: dict, is_highlighted: bool, parent=None):
+                 settings: dict, is_highlighted: bool, parent=None, reply_to: dict | None = None):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
@@ -374,12 +407,20 @@ class ChatMessageWidget(QTextEdit):
         visible_text = re.sub(r"<[^>]+>", "", content_html).strip()
         self.content_is_empty = not (animated_emotes or static_images or visible_text)
 
+        reply_html = ""
+        if reply_to and (reply_to.get("username") or reply_to.get("content")):
+            reply_html = render_reply_html(reply_to, text_color, size,
+                                           settings.get("block_emojis", False))
+
         text = (
             f'{badge_html}'
             f'<span style="color:{user_color};font-weight:{username_weight(settings)};">'
             f'{safe_user}</span>'
             f'<span style="color:{text_color};">: {content_html}</span>'
         )
+        if reply_html:
+            # alinti kendi paragrafinda durmazsa asil mesaj ayni satira yapisiyor
+            text = f'{reply_html}<p style="margin:0;">{text}</p>'
 
         # Butun gorsel resource'lar HTML islenmeden ONCE kaydedilir - aksi
         # halde setHtml() sirasinda kaynagi bulunamayan <img> bir an icin
